@@ -17,7 +17,6 @@ ROAD_FAR_W  = int(WIDTH * 0.18)
 
 SPAWN_MS = 520
 RAMP_CHANCE = 0.25
-
 SPRITE_ROT_DEG = 0
 
 pygame.init()
@@ -34,9 +33,8 @@ def draw_text(surf, text, x, y, color=(255, 255, 255), center=False, fnt=None):
     fnt = fnt or font
     img = fnt.render(text, True, color)
     rect = img.get_rect()
-    if center:
-        rect.center = (x, y)
-    else:
+    rect.center = (x, y) if center else rect.center
+    if not center:
         rect.topleft = (x, y)
     surf.blit(img, rect)
 
@@ -73,12 +71,9 @@ def rotate(img, deg):
 
 PLAYER_IMG = load_png("car_player.png", (260, 220), (220, 40, 40), colorkey=None)
 RAMP_IMG   = load_png("ramp_blue.png",  (280, 200), (70, 130, 255), colorkey=None)
-
-# IMPORTANT: niente colorkey qui (evita “trasparenze strane”)
 SUV1_IMG   = load_png("suv_black_1.png", (260, 220), (35, 35, 40), colorkey=None)
 SUV2_IMG   = load_png("suv_green.png",   (260, 220), (20, 180, 80), colorkey=None)
-
-BG_IMG = load_bg("nyc_bg.png")
+BG_IMG     = load_bg("nyc_bg.png")
 
 # -----------------------------
 # Road geometry
@@ -113,9 +108,14 @@ def draw_road(surf, t_ms):
 # -----------------------------
 LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
 RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
-JUMP_R = int(min(WIDTH, HEIGHT) * 0.055)
+
+BTN_R = int(min(WIDTH, HEIGHT) * 0.055)
+
 JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.82))
-JUMP_BTN = pygame.Rect(JUMP_C[0] - JUMP_R, JUMP_C[1] - JUMP_R, JUMP_R*2, JUMP_R*2)
+JUMP_BTN = pygame.Rect(JUMP_C[0] - BTN_R, JUMP_C[1] - BTN_R, BTN_R*2, BTN_R*2)
+
+RESTART_C = (int(WIDTH * 0.12), int(HEIGHT * 0.82))
+RESTART_BTN = pygame.Rect(RESTART_C[0] - BTN_R, RESTART_C[1] - BTN_R, BTN_R*2, BTN_R*2)
 
 def pointer_xy(event):
     if hasattr(event, "pos"):
@@ -124,7 +124,16 @@ def pointer_xy(event):
         return int(event.x * WIDTH), int(event.y * HEIGHT)
     return None
 
-def draw_touch_overlay(surf, left, right, jump):
+def draw_circle_button(surf, center, radius, label, active=False):
+    cx, cy = center
+    btn = pygame.Surface((radius*2, radius*2), pygame.SRCALPHA)
+    pygame.draw.circle(btn, (0, 0, 0, 95 if not active else 140), (radius, radius), radius)
+    pygame.draw.circle(btn, (255, 255, 255, 160), (radius, radius), radius-3, width=3)
+    surf.blit(btn, (cx - radius, cy - radius))
+    draw_text(surf, label, cx, cy-8, center=True, color=(255,255,255))
+
+def draw_touch_overlay(surf, left, right, jump, show_restart, restart_active):
+    # subtle zones
     z = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     if left:
         pygame.draw.rect(z, (255, 255, 255, 18), LEFT_ZONE)
@@ -132,11 +141,9 @@ def draw_touch_overlay(surf, left, right, jump):
         pygame.draw.rect(z, (255, 255, 255, 18), RIGHT_ZONE)
     surf.blit(z, (0, 0))
 
-    btn = pygame.Surface((JUMP_R*2, JUMP_R*2), pygame.SRCALPHA)
-    pygame.draw.circle(btn, (0, 0, 0, 90 if not jump else 130), (JUMP_R, JUMP_R), JUMP_R)
-    pygame.draw.circle(btn, (255, 255, 255, 150), (JUMP_R, JUMP_R), JUMP_R-3, width=3)
-    surf.blit(btn, (JUMP_BTN.left, JUMP_BTN.top))
-    draw_text(surf, "JUMP", JUMP_C[0], JUMP_C[1]-8, center=True, color=(255,255,255))
+    draw_circle_button(surf, JUMP_C, BTN_R, "JUMP", active=jump)
+    if show_restart:
+        draw_circle_button(surf, RESTART_C, BTN_R, "R", active=restart_active)
 
 # -----------------------------
 # Entities
@@ -153,7 +160,7 @@ class Player:
         self.jump_strength = 1.35
         self.on_ground = True
 
-        # riduci del 40% (il tuo era ~0.45) -> 0.27
+        # riduci del 40% rispetto a ~0.45 -> 0.27
         self.visual_scale = 0.27
 
     def jump(self, mult=1.0):
@@ -179,7 +186,6 @@ class Player:
     def draw(self, surf):
         x = self.screen_x()
 
-        # shadow
         shadow_scale = 1.0 - self.air * 0.35
         sw = int(110 * shadow_scale)
         sh = int(34 * shadow_scale)
@@ -258,17 +264,39 @@ def reset():
 # -----------------------------
 async def main():
     state = reset()
+    runtime_error = None
 
+    # START GATE (fix iPhone “Ready to start” flakiness)
+    started = False
+
+    # touch states
     pressed_left = False
     pressed_right = False
     pressed_jump = False
-
-    runtime_error = None  # if something crashes, we show it on screen
+    pressed_restart = False
 
     while True:
         try:
             dt = clock.tick(FPS) / 1000.0
             now = pygame.time.get_ticks()
+
+            # --- start screen: wait for a real gesture ---
+            if not started:
+                screen.fill((0, 0, 0))
+                draw_text(screen, "RIDERS", WIDTH//2, HEIGHT//2 - 40, center=True, fnt=big_font)
+                draw_text(screen, "TAP TO START", WIDTH//2, HEIGHT//2 + 10, center=True, color=(180, 180, 180))
+                draw_text(screen, "(iPhone: tap once)", WIDTH//2, HEIGHT//2 + 42, center=True, color=(130, 130, 130))
+                pygame.display.flip()
+
+                # eat events until a gesture comes
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        return
+                    if event.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN, pygame.KEYDOWN):
+                        started = True
+
+                await asyncio.sleep(0)
+                continue
 
             # keyboard steer
             keys = pygame.key.get_pressed()
@@ -278,37 +306,56 @@ async def main():
             if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
                 steer_dir += 1.0
 
+            # reset touch flags each frame
+            pressed_left = pressed_right = pressed_jump = pressed_restart = False
+
             # events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
 
+                # desktop keys
                 if event.type == pygame.KEYDOWN:
                     if not state["game_over"] and event.key == pygame.K_SPACE:
                         state["player"].jump(mult=1.0)
                     elif state["game_over"] and event.key == pygame.K_r:
                         state = reset()
 
+                # touch / mouse
                 if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP,
                                   pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
                     xy = pointer_xy(event)
-                    if xy is not None:
-                        mx, my = xy
-                        if event.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
-                            pressed_left = pressed_right = pressed_jump = False
-                        else:
-                            pressed_jump = JUMP_BTN.collidepoint(mx, my)
-                            pressed_left = LEFT_ZONE.collidepoint(mx, my)
-                            pressed_right = RIGHT_ZONE.collidepoint(mx, my)
+                    if xy is None:
+                        continue
+                    mx, my = xy
 
-            # touch overrides
+                    if event.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+                        # release -> nothing pressed
+                        pass
+                    else:
+                        # press/drag states
+                        if LEFT_ZONE.collidepoint(mx, my):
+                            pressed_left = True
+                        if RIGHT_ZONE.collidepoint(mx, my):
+                            pressed_right = True
+                        if JUMP_BTN.collidepoint(mx, my):
+                            pressed_jump = True
+                        if state["game_over"] and RESTART_BTN.collidepoint(mx, my):
+                            pressed_restart = True
+
+            # touch overrides steer
             if pressed_left and not pressed_right:
                 steer_dir = -1.0
             elif pressed_right and not pressed_left:
                 steer_dir = 1.0
 
+            # touch jump
             if pressed_jump and (not state["game_over"]):
                 state["player"].jump(mult=1.0)
+
+            # touch restart
+            if pressed_restart and state["game_over"]:
+                state = reset()
 
             elapsed = (now - state["start_ms"]) / 1000.0
             speed = 0.85 + 0.020 * elapsed
@@ -327,8 +374,7 @@ async def main():
                 for th in list(state["things"]):
                     if th.collides_with_player(state["player"]):
                         if th.kind == "ramp":
-                            # salto alto (>= doppio)
-                            state["player"].jump(mult=2.2)
+                            state["player"].jump(mult=2.2)  # jump higher
                             state["things"].remove(th)
                         else:
                             if state["player"].air > 0.28:
@@ -349,31 +395,37 @@ async def main():
 
             draw_text(screen, "RIDERS", 18, 12, color=(0, 0, 0))
             draw_text(screen, f"Score: {int(state['score'])}", 18, 40, color=(0, 0, 0))
-            draw_touch_overlay(screen, pressed_left, pressed_right, pressed_jump)
+
+            # touch overlay (restart only in game over)
+            draw_touch_overlay(
+                screen,
+                pressed_left,
+                pressed_right,
+                pressed_jump,
+                show_restart=state["game_over"],
+                restart_active=pressed_restart
+            )
 
             if state["game_over"]:
                 draw_text(screen, "GAME OVER", WIDTH//2, HEIGHT//2 - 35, center=True, fnt=big_font, color=(0, 0, 0))
-                draw_text(screen, "Press R to restart", WIDTH//2, HEIGHT//2 + 20, center=True, color=(0, 0, 0))
+                draw_text(screen, "Tap R button (or press R) to restart", WIDTH//2, HEIGHT//2 + 20, center=True, color=(0, 0, 0))
 
-            # show crash on screen (if any)
             if runtime_error:
                 overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
                 overlay.fill((0, 0, 0, 190))
                 screen.blit(overlay, (0, 0))
-                draw_text(screen, "RUNTIME ERROR (copy this)", 18, 18, color=(255, 120, 120))
+                draw_text(screen, "RUNTIME ERROR", 18, 18, color=(255, 120, 120))
                 y = 52
                 for line in runtime_error.splitlines()[:18]:
                     draw_text(screen, line[:120], 18, y, color=(255, 255, 255))
                     y += 24
 
             pygame.display.flip()
-
             await asyncio.sleep(0)
 
         except Exception:
             runtime_error = traceback.format_exc()
-            # keep loop alive so you can read the error on screen
             await asyncio.sleep(0)
 
-# IMPORTANT: su pygbag va avviato così (senza guard __main__)
+# Pygbag web entry
 asyncio.run(main())
