@@ -1,18 +1,18 @@
 import os
-import sys
 import random
 import pygame
+import asyncio
+import traceback
 
-# =============================
-# CONFIG
-# =============================
+# -----------------------------
+# Config
+# -----------------------------
 WIDTH, HEIGHT = 900, 600
 FPS = 60
 
-HORIZON_Y = int(HEIGHT * 0.50)
+HORIZON_Y = int(HEIGHT * 0.28)
 BOTTOM_Y  = int(HEIGHT * 0.98)
-
-ROAD_NEAR_W = int(WIDTH * 0.82)
+ROAD_NEAR_W = int(WIDTH * 0.80)
 ROAD_FAR_W  = int(WIDTH * 0.18)
 
 SPAWN_MS = 520
@@ -20,53 +20,42 @@ RAMP_CHANCE = 0.25
 
 SPRITE_ROT_DEG = 0
 
-PLAYER_SCALE_MULT = 0.60   # auto -40%
-SUV_SIZE_MULT = 1.20       # SUV +20%
-
-JUMP_MULT_ON_RAMP = 2.2
-LIFT_MULT = 1.55
-
-# --- Touch UI (smartphone) ---
-# aree touch: sinistra/destra per sterzo, bottone salto in basso a destra
-JUMP_BTN_W, JUMP_BTN_H = 165, 90
-JUMP_BTN_MARGIN = 18
-
 pygame.init()
-pygame.display.set_caption("Riders - NYC Day (Web-ready)")
+pygame.display.set_caption("Riders - NYC Day (Web)")
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
+font = pygame.font.SysFont(None, 24)
+big_font = pygame.font.SysFont(None, 56)
 
-font = pygame.font.SysFont(None, 28)
-big_font = pygame.font.SysFont(None, 64)
+def clamp(x, a, b): return max(a, min(b, x))
+def lerp(a, b, t): return a + (b - a) * t
 
-# =============================
-# UTILS
-# =============================
-def clamp(x, a, b):
-    return max(a, min(b, x))
-
-def lerp(a, b, t):
-    return a + (b - a) * t
-
-def draw_text(surf, text, x, y, color=(10,10,10), center=False, fnt=None):
+def draw_text(surf, text, x, y, color=(255, 255, 255), center=False, fnt=None):
     fnt = fnt or font
     img = fnt.render(text, True, color)
     rect = img.get_rect()
-    rect.center = (x, y) if center else rect.topleft
+    if center:
+        rect.center = (x, y)
+    else:
+        rect.topleft = (x, y)
     surf.blit(img, rect)
 
-# =============================
-# ASSETS
-# =============================
+# -----------------------------
+# Assets
+# -----------------------------
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 
-def load_png_alpha(filename, fallback_size, color):
+def load_png(filename, fallback_size, color, colorkey=None):
     path = os.path.join(ASSETS_DIR, filename)
     try:
-        return pygame.image.load(path).convert_alpha()
+        img = pygame.image.load(path).convert_alpha()
+        if colorkey is not None:
+            img.set_colorkey(colorkey)
+        return img
     except Exception:
         surf = pygame.Surface(fallback_size, pygame.SRCALPHA)
-        pygame.draw.rect(surf, color, (0,0,*fallback_size), border_radius=12)
+        pygame.draw.rect(surf, color, (0, 0, fallback_size[0], fallback_size[1]), border_radius=12)
+        pygame.draw.rect(surf, (20, 20, 20), (10, 12, fallback_size[0]-20, 22), border_radius=10)
         return surf
 
 def load_bg(filename):
@@ -76,149 +65,96 @@ def load_bg(filename):
         return pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
     except Exception:
         bg = pygame.Surface((WIDTH, HEIGHT))
-        bg.fill((170,220,255))
+        bg.fill((30, 30, 30))
         return bg
 
 def rotate(img, deg):
     return img if deg == 0 else pygame.transform.rotate(img, deg)
 
-def force_opaque_keep_transparent(surface):
-    """
-    Rende OPACHI (alpha=255) tutti i pixel visibili.
-    Mantiene alpha=0 solo dove è davvero trasparente.
-    (Fix utile se un PNG ha semitrasparenze indesiderate.)
-    """
-    surf = surface.convert_alpha()
-    try:
-        import pygame.surfarray as surfarray
-        a = surfarray.pixels_alpha(surf)
-        a[a > 0] = 255
-        del a
-    except Exception:
-        w, h = surf.get_size()
-        for y in range(h):
-            for x in range(w):
-                r,g,b,a = surf.get_at((x,y))
-                if a > 0:
-                    surf.set_at((x,y),(r,g,b,255))
-    return surf
+PLAYER_IMG = load_png("car_player.png", (260, 220), (220, 40, 40), colorkey=None)
+RAMP_IMG   = load_png("ramp_blue.png",  (280, 200), (70, 130, 255), colorkey=None)
 
-# --- LOAD FILES ---
-PLAYER_IMG = load_png_alpha("car_player.png",(260,220),(220,40,40))
-RAMP_IMG   = load_png_alpha("ramp_blue.png",(280,200),(70,130,255))
-
-SUV1_IMG  = load_png_alpha("suv_black_1.png",(260,220),(35,35,40))
-SUV2_IMG  = load_png_alpha("suv_green.png",(260,220),(20,80,40))
-# Se vuoi assicurarti che il verde NON sia mai trasparente:
-SUV2_IMG  = force_opaque_keep_transparent(SUV2_IMG)
+# IMPORTANT: niente colorkey qui (evita “trasparenze strane”)
+SUV1_IMG   = load_png("suv_black_1.png", (260, 220), (35, 35, 40), colorkey=None)
+SUV2_IMG   = load_png("suv_green.png",   (260, 220), (20, 180, 80), colorkey=None)
 
 BG_IMG = load_bg("nyc_bg.png")
 
-# =============================
-# ROAD GEOMETRY
-# =============================
+# -----------------------------
+# Road geometry
+# -----------------------------
 def road_half_width_at_y(y):
-    t = clamp((y - HORIZON_Y)/(BOTTOM_Y - HORIZON_Y), 0, 1)
-    return lerp(ROAD_FAR_W, ROAD_NEAR_W, t) / 2
-
-ROAD_TEXTURE = None
-
-def build_road_texture():
-    rnd = random.Random(1337)
-    tex = pygame.Surface((512,512)).convert()
-    tex.fill((95,95,100))  # asfalto chiaro
-    for _ in range(12000):
-        x,y = rnd.randrange(512), rnd.randrange(512)
-        v = rnd.randrange(85,135)
-        tex.set_at((x,y),(v,v,v))
-    return tex
-
-def draw_guard_rails(surf, y0, y1):
-    layer = pygame.Surface((WIDTH,HEIGHT), pygame.SRCALPHA)
-    for y in range(y0, y1, 4):
-        t = clamp((y-y0)/(y1-y0), 0, 1)
-        half = lerp(ROAD_FAR_W, ROAD_NEAR_W, t)/2
-        off = lerp(14, 28, t)
-        lx = int(WIDTH/2 - half - off)
-        rx = int(WIDTH/2 + half + off)
-        pygame.draw.line(layer, (160,160,160,220), (lx, y), (lx+8, y), 3)
-        pygame.draw.line(layer, (160,160,160,220), (rx-8, y), (rx, y), 3)
-    surf.blit(layer, (0,0))
+    t = clamp((y - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
+    w = lerp(ROAD_FAR_W, ROAD_NEAR_W, t)
+    return w / 2
 
 def draw_road(surf, t_ms):
-    global ROAD_TEXTURE
-    if ROAD_TEXTURE is None:
-        ROAD_TEXTURE = build_road_texture()
+    far_half = ROAD_FAR_W / 2
+    near_half = ROAD_NEAR_W / 2
 
-    y0, y1 = HORIZON_Y, int(BOTTOM_Y)
-    tex = ROAD_TEXTURE
+    pts = [
+        (WIDTH/2 - far_half, HORIZON_Y),
+        (WIDTH/2 + far_half, HORIZON_Y),
+        (WIDTH/2 + near_half, BOTTOM_Y),
+        (WIDTH/2 - near_half, BOTTOM_Y),
+    ]
+    pygame.draw.polygon(surf, (70, 70, 75), pts)
+    pygame.draw.line(surf, (245, 245, 245), pts[0], pts[3], 6)
+    pygame.draw.line(surf, (245, 245, 245), pts[1], pts[2], 6)
 
-    scroll = int((-t_ms * 0.20) % 512)  # verso giusto
-
-    for y in range(y0, y1):
-        t = clamp((y-y0)/(y1-y0), 0, 1)
-        half = lerp(ROAD_FAR_W, ROAD_NEAR_W, t)/2
-        left = int(WIDTH/2 - half)
-        w = int(half*2)
-
-        ty = (int(t*512) + scroll) % 512
-        row = pygame.transform.smoothscale(tex.subsurface((0,ty,512,1)), (w,1))
-        surf.blit(row, (left, y))
-
-    # bordi
-    pygame.draw.line(surf, (245,245,245), (WIDTH/2-road_half_width_at_y(y0), y0),
-                     (WIDTH/2-road_half_width_at_y(y1), y1), 6)
-    pygame.draw.line(surf, (245,245,245), (WIDTH/2+road_half_width_at_y(y0), y0),
-                     (WIDTH/2+road_half_width_at_y(y1), y1), 6)
-
-    # linea centrale tratteggiata
-    dash_len, gap = 28, 18
-    offset = int((t_ms * 0.30) % (dash_len + gap))
-    for y in range(y0 + 20, y1 + 140, dash_len + gap):
+    dash_len, gap = 26, 18
+    offset = int((t_ms * 0.28) % (dash_len + gap))
+    for y in range(HORIZON_Y + 15, int(BOTTOM_Y) + 120, dash_len + gap):
         yy = y + offset
-        if y0 <= yy <= y1:
-            pygame.draw.rect(surf, (235,235,90), (WIDTH//2 - 4, yy, 8, dash_len), border_radius=4)
+        pygame.draw.rect(surf, (235, 235, 90), (WIDTH/2 - 4, yy, 8, dash_len), border_radius=4)
 
-    draw_guard_rails(surf, y0, y1)
+# -----------------------------
+# Touch UI
+# -----------------------------
+LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
+RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
+JUMP_R = int(min(WIDTH, HEIGHT) * 0.055)
+JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.82))
+JUMP_BTN = pygame.Rect(JUMP_C[0] - JUMP_R, JUMP_C[1] - JUMP_R, JUMP_R*2, JUMP_R*2)
 
-# =============================
-# TOUCH UI
-# =============================
-def get_jump_button_rect():
-    return pygame.Rect(
-        WIDTH - JUMP_BTN_W - JUMP_BTN_MARGIN,
-        HEIGHT - JUMP_BTN_H - JUMP_BTN_MARGIN,
-        JUMP_BTN_W,
-        JUMP_BTN_H
-    )
+def pointer_xy(event):
+    if hasattr(event, "pos"):
+        return event.pos
+    if event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+        return int(event.x * WIDTH), int(event.y * HEIGHT)
+    return None
 
-def draw_touch_ui(surf):
-    # Semitrasparente (solo UI), per capire dove toccare
-    jump_rect = get_jump_button_rect()
-    ui = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+def draw_touch_overlay(surf, left, right, jump):
+    z = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    if left:
+        pygame.draw.rect(z, (255, 255, 255, 18), LEFT_ZONE)
+    if right:
+        pygame.draw.rect(z, (255, 255, 255, 18), RIGHT_ZONE)
+    surf.blit(z, (0, 0))
 
-    # bottone salto
-    pygame.draw.rect(ui, (20, 20, 20, 120), jump_rect, border_radius=18)
-    pygame.draw.rect(ui, (250, 250, 250, 160), jump_rect, width=2, border_radius=18)
-    surf.blit(ui, (0,0))
+    btn = pygame.Surface((JUMP_R*2, JUMP_R*2), pygame.SRCALPHA)
+    pygame.draw.circle(btn, (0, 0, 0, 90 if not jump else 130), (JUMP_R, JUMP_R), JUMP_R)
+    pygame.draw.circle(btn, (255, 255, 255, 150), (JUMP_R, JUMP_R), JUMP_R-3, width=3)
+    surf.blit(btn, (JUMP_BTN.left, JUMP_BTN.top))
+    draw_text(surf, "JUMP", JUMP_C[0], JUMP_C[1]-8, center=True, color=(255,255,255))
 
-    draw_text(surf, "SALTA", jump_rect.centerx, jump_rect.centery-8, color=(255,255,255), center=True)
-    draw_text(surf, "TOUCH", jump_rect.centerx, jump_rect.centery+18, color=(235,235,235), center=True, fnt=font)
-
-# =============================
-# ENTITIES
-# =============================
+# -----------------------------
+# Entities
+# -----------------------------
 class Player:
     def __init__(self):
         self.lane_x = 0.0
-        self.y = int(HEIGHT * 0.88)
+        self.steer_speed = 1.75
+        self.y = int(HEIGHT * 0.78)
 
         self.air = 0.0
         self.v_air = 0.0
+        self.gravity = 2.9
         self.jump_strength = 1.35
         self.on_ground = True
 
-        self.steer_speed = 2.0
+        # riduci del 40% (il tuo era ~0.45) -> 0.27
+        self.visual_scale = 0.27
 
     def jump(self, mult=1.0):
         if self.on_ground:
@@ -226,42 +162,45 @@ class Player:
             self.on_ground = False
 
     def update(self, dt, steer_dir):
-        # steer_dir: -1, 0, +1
-        self.lane_x = clamp(self.lane_x + steer_dir * self.steer_speed * dt, -0.95, 0.95)
+        self.lane_x = clamp(self.lane_x + steer_dir * self.steer_speed * dt, -0.98, 0.98)
 
         if not self.on_ground:
             self.air += self.v_air * dt * 2.2
-            self.v_air -= 2.9 * dt * 2.2
-            if self.air <= 0:
-                self.air = 0
-                self.v_air = 0
+            self.v_air -= self.gravity * dt * 2.2
+            if self.air <= 0.0:
+                self.air = 0.0
+                self.v_air = 0.0
                 self.on_ground = True
 
     def screen_x(self):
-        return int(WIDTH/2 + self.lane_x * road_half_width_at_y(self.y))
+        half = road_half_width_at_y(self.y)
+        return int(WIDTH/2 + self.lane_x * half)
 
     def draw(self, surf):
         x = self.screen_x()
 
-        # ombra pulita
-        shadow_scale = 1.0 - self.air * 0.25
-        sw, sh = int(110 * shadow_scale), int(30 * shadow_scale)
+        # shadow
+        shadow_scale = 1.0 - self.air * 0.35
+        sw = int(110 * shadow_scale)
+        sh = int(34 * shadow_scale)
         shadow = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        pygame.draw.ellipse(shadow, (0,0,0,90), (0,0,sw,sh))
-        surf.blit(shadow, shadow.get_rect(center=(x, self.y + 48)))
+        pygame.draw.ellipse(shadow, (0, 0, 0, 110), (0, 0, sw, sh))
+        surf.blit(shadow, shadow.get_rect(center=(x, self.y + 62)))
 
-        w = int(PLAYER_IMG.get_width() * 0.45 * PLAYER_SCALE_MULT)
-        h = int(PLAYER_IMG.get_height() * 0.45 * PLAYER_SCALE_MULT)
-        img = pygame.transform.smoothscale(PLAYER_IMG, (w, h))
+        base_w = int(PLAYER_IMG.get_width() * self.visual_scale)
+        base_h = int(PLAYER_IMG.get_height() * self.visual_scale)
+        img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
         img = rotate(img, SPRITE_ROT_DEG)
 
-        lift = int(90 * self.air * LIFT_MULT)
+        lift = int(95 * self.air)
         surf.blit(img, img.get_rect(center=(x, self.y - lift)))
 
 class Thing:
     def __init__(self, kind):
         self.kind = kind
-        self.lane_x = random.choice([-0.7, -0.25, 0.25, 0.7]) + random.uniform(-0.10, 0.10)
+
+        lanes = [-0.70, -0.25, 0.25, 0.70]
+        self.lane_x = random.choice(lanes) + random.uniform(-0.12, 0.12)
         self.lane_x = clamp(self.lane_x, -0.95, 0.95)
 
         self.d = 1.0 + random.uniform(0.02, 0.15)
@@ -275,173 +214,166 @@ class Thing:
 
     def screen_pos_and_scale(self):
         t = clamp(1.0 - self.d, 0.0, 1.0)
-        y = int(lerp(HORIZON_Y + 20, HEIGHT * 0.88, t))
-        x = int(WIDTH/2 + self.lane_x * road_half_width_at_y(y))
+        y = lerp(HORIZON_Y + 20, int(HEIGHT * 0.82), t)
+        half = road_half_width_at_y(y)
+        x = WIDTH/2 + self.lane_x * half
         scale = lerp(0.20, 0.85, t)
-        return x, y, scale
+        return int(x), int(y), scale
 
     def draw(self, surf):
         x, y, scale = self.screen_pos_and_scale()
 
         if self.kind == "suv":
             src = SUV1_IMG if self.variant == 1 else SUV2_IMG
-            w = max(34, int(src.get_width() * 0.22 * scale * SUV_SIZE_MULT))
-            h = max(34, int(src.get_height() * 0.22 * scale * SUV_SIZE_MULT))
-            img = pygame.transform.smoothscale(src, (w, h))
+            w = max(34, int(src.get_width() * 0.22 * scale))
+            h = max(34, int(src.get_height() * 0.22 * scale))
         else:
             src = RAMP_IMG
             w = max(44, int(src.get_width() * 0.20 * scale))
             h = max(30, int(src.get_height() * 0.20 * scale))
-            img = pygame.transform.smoothscale(src, (w, h))
 
+        img = pygame.transform.smoothscale(src, (w, h))
         img = rotate(img, SPRITE_ROT_DEG)
         surf.blit(img, img.get_rect(center=(x, y)))
 
-    def collides(self, player: Player):
-        # finestra collisione quando l'oggetto arriva “vicino”
+    def collides_with_player(self, player: Player):
         if not (0.00 <= self.d <= 0.10):
             return False
         px = player.screen_x()
         x, _, _ = self.screen_pos_and_scale()
         return abs(px - x) < 75
 
-# =============================
-# MAIN LOOP
-# =============================
-def main():
-    player = Player()
-    things = []
-    last_spawn = pygame.time.get_ticks()
-    start = pygame.time.get_ticks()
-    score = 0.0
-    game_over = False
+def reset():
+    return {
+        "player": Player(),
+        "things": [],
+        "score": 0.0,
+        "start_ms": pygame.time.get_ticks(),
+        "last_spawn": pygame.time.get_ticks(),
+        "game_over": False,
+    }
 
-    # touch state
-    touch_left = False
-    touch_right = False
+# -----------------------------
+# Async game loop (web-safe)
+# -----------------------------
+async def main():
+    state = reset()
+
+    pressed_left = False
+    pressed_right = False
+    pressed_jump = False
+
+    runtime_error = None  # if something crashes, we show it on screen
 
     while True:
-        dt = clock.tick(FPS) / 1000.0
-        now = pygame.time.get_ticks()
+        try:
+            dt = clock.tick(FPS) / 1000.0
+            now = pygame.time.get_ticks()
 
-        # ---- input: keyboard base ----
-        keys = pygame.key.get_pressed()
-        steer_dir = 0
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            steer_dir -= 1
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            steer_dir += 1
+            # keyboard steer
+            keys = pygame.key.get_pressed()
+            steer_dir = 0.0
+            if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+                steer_dir -= 1.0
+            if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+                steer_dir += 1.0
 
-        # ---- input: touch (mouse + finger) ----
-        jump_rect = get_jump_button_rect()
+            # events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
 
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if not state["game_over"] and event.key == pygame.K_SPACE:
+                        state["player"].jump(mult=1.0)
+                    elif state["game_over"] and event.key == pygame.K_r:
+                        state = reset()
 
-            # desktop jump
-            if e.type == pygame.KEYDOWN:
-                if not game_over and e.key == pygame.K_SPACE:
-                    player.jump(1.0)
-                if game_over and e.key == pygame.K_r:
-                    player = Player()
-                    things = []
-                    last_spawn = now
-                    start = now
-                    score = 0.0
-                    game_over = False
+                if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP,
+                                  pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+                    xy = pointer_xy(event)
+                    if xy is not None:
+                        mx, my = xy
+                        if event.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+                            pressed_left = pressed_right = pressed_jump = False
+                        else:
+                            pressed_jump = JUMP_BTN.collidepoint(mx, my)
+                            pressed_left = LEFT_ZONE.collidepoint(mx, my)
+                            pressed_right = RIGHT_ZONE.collidepoint(mx, my)
 
-            # mouse/touch emulation
-            if e.type == pygame.MOUSEBUTTONDOWN:
-                mx, my = e.pos
-                if jump_rect.collidepoint(mx, my):
-                    if not game_over:
-                        player.jump(1.0)
-                else:
-                    if mx < WIDTH * 0.5:
-                        touch_left = True
-                    else:
-                        touch_right = True
+            # touch overrides
+            if pressed_left and not pressed_right:
+                steer_dir = -1.0
+            elif pressed_right and not pressed_left:
+                steer_dir = 1.0
 
-            if e.type == pygame.MOUSEBUTTONUP:
-                touch_left = False
-                touch_right = False
+            if pressed_jump and (not state["game_over"]):
+                state["player"].jump(mult=1.0)
 
-            # real finger events (alcuni browser/pygbag li mandano)
-            if e.type == pygame.FINGERDOWN:
-                mx = int(e.x * WIDTH)
-                my = int(e.y * HEIGHT)
-                if jump_rect.collidepoint(mx, my):
-                    if not game_over:
-                        player.jump(1.0)
-                else:
-                    if mx < WIDTH * 0.5:
-                        touch_left = True
-                    else:
-                        touch_right = True
+            elapsed = (now - state["start_ms"]) / 1000.0
+            speed = 0.85 + 0.020 * elapsed
 
-            if e.type == pygame.FINGERUP:
-                touch_left = False
-                touch_right = False
+            if not state["game_over"]:
+                state["player"].update(dt, steer_dir)
 
-        # apply touch steer (adds to keyboard)
-        if touch_left and not touch_right:
-            steer_dir -= 1
-        if touch_right and not touch_left:
-            steer_dir += 1
-        steer_dir = clamp(steer_dir, -1, 1)
+                if now - state["last_spawn"] > SPAWN_MS:
+                    kind = "ramp" if random.random() < RAMP_CHANCE else "suv"
+                    state["things"].append(Thing(kind))
+                    state["last_spawn"] = now
 
-        # ---- game update ----
-        elapsed = (now - start) / 1000.0
-        speed = 0.85 + 0.020 * elapsed
+                for th in state["things"]:
+                    th.update(dt, speed)
 
-        if not game_over:
-            player.update(dt, steer_dir)
+                for th in list(state["things"]):
+                    if th.collides_with_player(state["player"]):
+                        if th.kind == "ramp":
+                            # salto alto (>= doppio)
+                            state["player"].jump(mult=2.2)
+                            state["things"].remove(th)
+                        else:
+                            if state["player"].air > 0.28:
+                                continue
+                            state["game_over"] = True
 
-            if now - last_spawn > SPAWN_MS:
-                kind = "ramp" if random.random() < RAMP_CHANCE else "suv"
-                things.append(Thing(kind))
-                last_spawn = now
+                state["things"] = [t for t in state["things"] if not t.is_dead()]
+                state["score"] += (speed * 120) * dt
 
-            for t in things:
-                t.update(dt, speed)
+            # draw
+            screen.blit(BG_IMG, (0, 0))
+            draw_road(screen, now)
 
-            for t in list(things):
-                if t.collides(player):
-                    if t.kind == "ramp":
-                        player.jump(JUMP_MULT_ON_RAMP)
-                        things.remove(t)
-                    else:
-                        if player.air < 0.28:
-                            game_over = True
+            for th in sorted(state["things"], key=lambda t: t.d, reverse=True):
+                th.draw(screen)
 
-            things = [t for t in things if not t.is_dead()]
-            score += speed * 120 * dt
+            state["player"].draw(screen)
 
-        # ---- draw ----
-        screen.blit(BG_IMG, (0, 0))
-        draw_road(screen, now)
+            draw_text(screen, "RIDERS", 18, 12, color=(0, 0, 0))
+            draw_text(screen, f"Score: {int(state['score'])}", 18, 40, color=(0, 0, 0))
+            draw_touch_overlay(screen, pressed_left, pressed_right, pressed_jump)
 
-        for t in sorted(things, key=lambda x: x.d, reverse=True):
-            t.draw(screen)
+            if state["game_over"]:
+                draw_text(screen, "GAME OVER", WIDTH//2, HEIGHT//2 - 35, center=True, fnt=big_font, color=(0, 0, 0))
+                draw_text(screen, "Press R to restart", WIDTH//2, HEIGHT//2 + 20, center=True, color=(0, 0, 0))
 
-        player.draw(screen)
+            # show crash on screen (if any)
+            if runtime_error:
+                overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 190))
+                screen.blit(overlay, (0, 0))
+                draw_text(screen, "RUNTIME ERROR (copy this)", 18, 18, color=(255, 120, 120))
+                y = 52
+                for line in runtime_error.splitlines()[:18]:
+                    draw_text(screen, line[:120], 18, y, color=(255, 255, 255))
+                    y += 24
 
-        # UI/HUD
-        draw_text(screen, "RIDERS", 18, 12, color=(0,0,0))
-        draw_text(screen, f"Score: {int(score)}", 18, 42, color=(0,0,0))
-        draw_text(screen, "A/D sterzo | SPAZIO salto | R restart", 18, HEIGHT-28, color=(0,0,0))
+            pygame.display.flip()
 
-        draw_touch_ui(screen)
+            await asyncio.sleep(0)
 
-        if game_over:
-            draw_text(screen, "GAME OVER", WIDTH//2, HEIGHT//2 - 35, center=True, fnt=big_font, color=(0,0,0))
-            draw_text(screen, f"Punteggio: {int(score)}", WIDTH//2, HEIGHT//2 + 20, center=True, color=(0,0,0))
-            draw_text(screen, "Premi R per ricominciare", WIDTH//2, HEIGHT//2 + 52, center=True, color=(0,0,0))
+        except Exception:
+            runtime_error = traceback.format_exc()
+            # keep loop alive so you can read the error on screen
+            await asyncio.sleep(0)
 
-        pygame.display.flip()
-
-# run
-if __name__ == "__main__":
-    main()
+# IMPORTANT: su pygbag va avviato così (senza guard __main__)
+asyncio.run(main())
