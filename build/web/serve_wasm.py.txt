@@ -1,0 +1,39 @@
+# serve_wasm.py — semplice server statico che setta MIME per .wasm e header CORS
+import http.server
+import socketserver
+import mimetypes
+import os
+
+PORT = 8000
+WEBROOT = os.path.join(os.path.dirname(__file__), "build", "web")
+
+# assicurati che .wasm venga servito con application/wasm
+mimetypes.add_type("application/wasm", ".wasm")
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        # aggiunge header CORS utili per testing locale
+        self.send_header("Access-Control-Allow-Origin", "*")
+        super().end_headers()
+
+    # serve dalla cartella build/web
+    def translate_path(self, path):
+        # delega a SimpleHTTPRequestHandler ma fissa la root
+        path = path.split('?',1)[0].split('#',1)[0]
+        relpath = path.lstrip('/')
+        full = os.path.join(WEBROOT, relpath)
+        if os.path.isdir(full):
+            # se è una dir, serviamo index.html dentro
+            index = os.path.join(full, "index.html")
+            if os.path.exists(index):
+                return index
+        return full
+
+if __name__ == "__main__":
+    os.chdir(WEBROOT)
+    with socketserver.TCPServer(("127.0.0.1", PORT), Handler) as httpd:
+        print(f"Serving {WEBROOT} on http://127.0.0.1:{PORT}")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("Stopped.")
