@@ -1,3 +1,5 @@
+print("RIDERS BUILD: 2026-02-06 12:34 - LAMPS+DAYNIGHT")
+
 import os
 import random
 import pygame
