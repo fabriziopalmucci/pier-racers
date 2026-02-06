@@ -1,5 +1,3 @@
-print("RIDERS BUILD: 2026-02-06 12:34 - LAMPS+DAYNIGHT")
-
 import os
 import random
 import pygame
@@ -12,24 +10,24 @@ import traceback
 WIDTH, HEIGHT = 900, 600
 FPS = 60
 
-# Prospettiva: abbasso l'orizzonte così la strada "finisce" più in basso,
-# verso la base dei grattacieli
-HORIZON_Y = int(HEIGHT * 0.45)   # prima ~0.28
+# Strada: più larga in basso + "fine" più bassa
+HORIZON_Y = int(HEIGHT * 0.52)     # era 0.45 -> ora finisce più in basso
 BOTTOM_Y  = int(HEIGHT * 0.98)
 
-ROAD_NEAR_W = int(WIDTH * 0.80)
-ROAD_FAR_W  = int(WIDTH * 0.22)  # leggermente più larga per prospettiva più naturale
+ROAD_NEAR_W = int(WIDTH * 0.92)    # era 0.80 -> più larga in basso
+ROAD_FAR_W  = int(WIDTH * 0.28)    # un po' più larga in alto per prospettiva più naturale
 
 SPAWN_MS = 520
 RAMP_CHANCE = 0.25
 SPRITE_ROT_DEG = 0
 
 DAY_NIGHT_PERIOD_S = 60  # ogni 60s cambia
+
 # -----------------------------
 
 pygame.init()
 
-# iPhone/Safari: riduce i blocchi "Ready to start" se non usi audio
+# iPhone/Safari: riduce blocchi "Ready to start" se non usi audio
 try:
     pygame.mixer.quit()
 except Exception:
@@ -100,14 +98,7 @@ def road_half_width_at_y(y):
     return w / 2
 
 def draw_lamps(surf, is_night, t_ms):
-    """
-    Lampioni ai lati strada.
-    Di giorno: solo lampioni (più discreti)
-    Di notte: luce + alone che illumina la strada
-    """
-    # distanza lampioni lungo la strada (screen space)
     step = 70
-    # piccola animazione "scorrimento" coerente con dashes (opzionale)
     scroll = int((t_ms * 0.10) % step)
 
     for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + step, step):
@@ -116,28 +107,22 @@ def draw_lamps(surf, is_night, t_ms):
             continue
 
         half = road_half_width_at_y(yy)
-        # bordo strada + un piccolo offset verso l'esterno
         left_x  = int(WIDTH/2 - half - 18)
         right_x = int(WIDTH/2 + half + 18)
 
-        # scala prospettica (lampioni più piccoli lontano)
         t = clamp((yy - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
         pole_h = int(lerp(22, 62, t))
         pole_w = max(2, int(lerp(1, 4, t)))
         head_r = max(3, int(lerp(3, 7, t)))
 
-        # palo (sinistra e destra)
         for x in (left_x, right_x):
             pygame.draw.rect(surf, (55, 55, 60), (x - pole_w//2, yy - pole_h, pole_w, pole_h), border_radius=2)
 
-            # testa lampione
             if is_night:
                 pygame.draw.circle(surf, (255, 245, 200), (x, yy - pole_h), head_r)
-                # alone
                 glow_r = int(head_r * 10)
                 glow = pygame.Surface((glow_r*2, glow_r*2), pygame.SRCALPHA)
                 pygame.draw.circle(glow, (255, 240, 190, 40), (glow_r, glow_r), glow_r)
-                # un secondo alone più forte
                 pygame.draw.circle(glow, (255, 240, 190, 70), (glow_r, glow_r), int(glow_r*0.55))
                 surf.blit(glow, (x - glow_r, (yy - pole_h) - glow_r))
             else:
@@ -154,23 +139,20 @@ def draw_road(surf, t_ms, is_night):
         (WIDTH/2 - near_half, BOTTOM_Y),
     ]
 
-    # asfalto un po' più chiaro (si distinguono meglio le auto)
-    asphalt = (92, 92, 98) if not is_night else (55, 55, 60)
+    asphalt = (98, 98, 104) if not is_night else (55, 55, 60)
     pygame.draw.polygon(surf, asphalt, pts)
 
-    # linee bordi
     edge = (245, 245, 245) if not is_night else (210, 210, 210)
     pygame.draw.line(surf, edge, pts[0], pts[3], 6)
     pygame.draw.line(surf, edge, pts[1], pts[2], 6)
 
-    # linea centrale: NERA (richiesta)
+    # linea centrale nera
     dash_len, gap = 26, 18
     offset = int((t_ms * 0.28) % (dash_len + gap))
     for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + 120, dash_len + gap):
         yy = y + offset
         pygame.draw.rect(surf, (15, 15, 15), (WIDTH/2 - 3, yy, 6, dash_len), border_radius=3)
 
-    # lampioni sopra la strada
     draw_lamps(surf, is_night, t_ms)
 
 # -----------------------------
@@ -179,8 +161,7 @@ def draw_road(surf, t_ms, is_night):
 LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
 RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
 
-# Pulsanti doppi (2x)
-BTN_R = int(min(WIDTH, HEIGHT) * 0.11)   # prima ~0.055
+BTN_R = int(min(WIDTH, HEIGHT) * 0.11)
 
 JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.82))
 JUMP_BTN = pygame.Rect(JUMP_C[0] - BTN_R, JUMP_C[1] - BTN_R, BTN_R*2, BTN_R*2)
@@ -219,8 +200,8 @@ class Player:
         self.lane_x = 0.0
         self.steer_speed = 1.75
 
-        # allineata alla "zona SUV"
-        self.y = int(HEIGHT * 0.82)
+        # sposto il player leggermente più in basso per seguire la nuova prospettiva
+        self.y = int(HEIGHT * 0.86)  # era 0.82
 
         self.air = 0.0
         self.v_air = 0.0
@@ -253,7 +234,6 @@ class Player:
     def draw(self, surf):
         x = self.screen_x()
 
-        # Ombra rimossa (richiesta): niente effetto sospesa
         base_w = int(PLAYER_IMG.get_width() * self.visual_scale)
         base_h = int(PLAYER_IMG.get_height() * self.visual_scale)
         img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
@@ -265,7 +245,6 @@ class Player:
 class Thing:
     def __init__(self, kind):
         self.kind = kind
-
         lanes = [-0.70, -0.25, 0.25, 0.70]
         self.lane_x = random.choice(lanes) + random.uniform(-0.12, 0.12)
         self.lane_x = clamp(self.lane_x, -0.95, 0.95)
@@ -280,11 +259,16 @@ class Thing:
         return self.d < -0.20
 
     def screen_pos_and_scale(self):
+        # con l'orizzonte più basso, stringo un po' il range e porto il "near"
+        # più in basso, così la prospettiva resta credibile.
         t = clamp(1.0 - self.d, 0.0, 1.0)
-        y = lerp(HORIZON_Y + 10, int(HEIGHT * 0.82), t)
+        y = lerp(HORIZON_Y + 8, int(HEIGHT * 0.86), t)
+
         half = road_half_width_at_y(y)
         x = WIDTH/2 + self.lane_x * half
-        scale = lerp(0.20, 0.85, t)
+
+        # scale aggiornato: leggermente più grande vicino
+        scale = lerp(0.18, 0.92, t)
         return int(x), int(y), scale
 
     def draw(self, surf):
@@ -328,8 +312,7 @@ async def main():
     runtime_error = None
     started = False
 
-    # Touch hold tracking
-    active_fingers = {}  # finger_id -> (x,y)
+    active_fingers = {}
     mouse_down = False
     mouse_pos = (0, 0)
 
@@ -338,11 +321,9 @@ async def main():
             dt = clock.tick(FPS) / 1000.0
             now = pygame.time.get_ticks()
 
-            # Giorno/notte
             seconds = (now // 1000) % (DAY_NIGHT_PERIOD_S * 2)
             is_night = (seconds >= DAY_NIGHT_PERIOD_S)
 
-            # Start gate
             if not started:
                 screen.fill((0, 0, 0))
                 draw_text(screen, "RIDERS", WIDTH//2, HEIGHT//2 - 40, center=True, fnt=big_font)
@@ -356,7 +337,6 @@ async def main():
                 await asyncio.sleep(0)
                 continue
 
-            # Events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
@@ -367,7 +347,6 @@ async def main():
                     elif state["game_over"] and event.key == pygame.K_r:
                         state = reset()
 
-                # mouse
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_down = True
                     mouse_pos = event.pos
@@ -376,7 +355,6 @@ async def main():
                 elif event.type == pygame.MOUSEBUTTONUP:
                     mouse_down = False
 
-                # touch
                 if event.type == pygame.FINGERDOWN:
                     fid = getattr(event, "finger_id", 0)
                     active_fingers[fid] = finger_to_xy(event.x, event.y)
@@ -388,7 +366,6 @@ async def main():
                     fid = getattr(event, "finger_id", 0)
                     active_fingers.pop(fid, None)
 
-            # Input
             pressed_left = pressed_right = pressed_jump = pressed_restart = False
 
             keys = pygame.key.get_pressed()
@@ -424,7 +401,6 @@ async def main():
             if pressed_restart and state["game_over"]:
                 state = reset()
 
-            # Update
             elapsed = (now - state["start_ms"]) / 1000.0
             speed = 0.85 + 0.020 * elapsed
 
@@ -452,32 +428,25 @@ async def main():
                 state["things"] = [t for t in state["things"] if not t.is_dead()]
                 state["score"] += (speed * 120) * dt
 
-            # Draw background
             screen.blit(BG_IMG, (0, 0))
 
-            # Night overlay (prima della strada) per scurire skyline e scena
             if is_night:
                 overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
                 overlay.fill((0, 0, 0, 120))
                 screen.blit(overlay, (0, 0))
 
-            # Road + lamps
             draw_road(screen, now, is_night)
 
-            # Obstacles
             for th in sorted(state["things"], key=lambda t: t.d, reverse=True):
                 th.draw(screen)
 
-            # Player
             state["player"].draw(screen)
 
-            # HUD
             draw_text(screen, "RIDERS", 18, 12, color=(0, 0, 0) if not is_night else (240, 240, 240))
             label = "Night" if is_night else "Day"
             draw_text(screen, f"{label} | Score: {int(state['score'])}", 18, 40,
                       color=(0, 0, 0) if not is_night else (240, 240, 240))
 
-            # Touch overlay
             draw_touch_overlay(
                 screen,
                 pressed_left, pressed_right, pressed_jump,
