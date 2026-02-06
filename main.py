@@ -11,17 +11,17 @@ WIDTH, HEIGHT = 900, 600
 FPS = 60
 
 # Strada: più larga in basso + "fine" più bassa
-HORIZON_Y = int(HEIGHT * 0.52)     # era 0.45 -> ora finisce più in basso
-BOTTOM_Y  = int(HEIGHT * 0.98)
+HORIZON_Y = int(HEIGHT * 0.60)     # più in basso (prima 0.52)
+BOTTOM_Y  = int(HEIGHT * 0.985)
 
-ROAD_NEAR_W = int(WIDTH * 0.92)    # era 0.80 -> più larga in basso
-ROAD_FAR_W  = int(WIDTH * 0.28)    # un po' più larga in alto per prospettiva più naturale
+ROAD_NEAR_W = int(WIDTH * 0.98)    # ancora più larga in basso (prima 0.92)
+ROAD_FAR_W  = int(WIDTH * 0.34)    # un po' più larga in alto per bilanciare
 
 SPAWN_MS = 520
 RAMP_CHANCE = 0.25
 SPRITE_ROT_DEG = 0
 
-DAY_NIGHT_PERIOD_S = 60  # ogni 60s cambia
+DAY_NIGHT_PERIOD_S = 60  # ogni 60s cambia giorno/notte
 
 # -----------------------------
 
@@ -46,9 +46,8 @@ def draw_text(surf, text, x, y, color=(255, 255, 255), center=False, fnt=None):
     fnt = fnt or font
     img = fnt.render(text, True, color)
     rect = img.get_rect()
-    if center:
-        rect.center = (x, y)
-    else:
+    rect.center = (x, y) if center else rect.move(x - rect.x, y - rect.y).topleft
+    if not center:
         rect.topleft = (x, y)
     surf.blit(img, rect)
 
@@ -98,35 +97,74 @@ def road_half_width_at_y(y):
     return w / 2
 
 def draw_lamps(surf, is_night, t_ms):
-    step = 70
-    scroll = int((t_ms * 0.10) % step)
+    # più radi e più piccoli (circa dimezzati)
+    step = 110
+    scroll = int((t_ms * 0.12) % step)
 
-    for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + step, step):
+    for y in range(HORIZON_Y + 8, int(BOTTOM_Y) + step, step):
         yy = y + scroll
-        if yy < HORIZON_Y + 8 or yy > BOTTOM_Y + 40:
+        if yy < HORIZON_Y + 6 or yy > BOTTOM_Y + 60:
             continue
 
         half = road_half_width_at_y(yy)
-        left_x  = int(WIDTH/2 - half - 18)
-        right_x = int(WIDTH/2 + half + 18)
+        left_base_x  = int(WIDTH/2 - half - 10)
+        right_base_x = int(WIDTH/2 + half + 10)
 
         t = clamp((yy - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
-        pole_h = int(lerp(22, 62, t))
-        pole_w = max(2, int(lerp(1, 4, t)))
-        head_r = max(3, int(lerp(3, 7, t)))
 
-        for x in (left_x, right_x):
-            pygame.draw.rect(surf, (55, 55, 60), (x - pole_w//2, yy - pole_h, pole_w, pole_h), border_radius=2)
+        # dimensioni dimezzate circa
+        pole_h = int(lerp(18, 42, t))
+        pole_w = max(2, int(lerp(1, 3, t)))
+
+        # braccio a "L" che entra verso la strada
+        arm_len = int(lerp(10, 26, t))
+        arm_drop = int(lerp(4, 10, t))  # luce un po' più giù del braccio
+
+        # offset luce (più vicino alla strada rispetto al palo)
+        # lato sinistro: braccio verso destra (in strada), lato destro: verso sinistra
+        for base_x, side in ((left_base_x, "L"), (right_base_x, "R")):
+            top_y = yy - pole_h
+
+            # palo verticale
+            pygame.draw.rect(surf, (60, 60, 66), (base_x - pole_w//2, top_y, pole_w, pole_h), border_radius=2)
+
+            # braccio orizzontale (forma L)
+            if side == "L":
+                arm_end_x = base_x + arm_len
+            else:
+                arm_end_x = base_x - arm_len
+            arm_y = top_y + int(pole_h * 0.22)
+            pygame.draw.line(surf, (60, 60, 66), (base_x, arm_y), (arm_end_x, arm_y), pole_w)
+
+            # luce più vicina alla strada (verso il centro)
+            lamp_x = arm_end_x
+            lamp_y = arm_y + arm_drop
+
+            # testa lampione
+            head_r = max(2, int(lerp(2, 5, t)))
+            pygame.draw.circle(surf, (120, 120, 125) if not is_night else (255, 245, 210), (lamp_x, lamp_y), head_r)
 
             if is_night:
-                pygame.draw.circle(surf, (255, 245, 200), (x, yy - pole_h), head_r)
-                glow_r = int(head_r * 10)
-                glow = pygame.Surface((glow_r*2, glow_r*2), pygame.SRCALPHA)
-                pygame.draw.circle(glow, (255, 240, 190, 40), (glow_r, glow_r), glow_r)
-                pygame.draw.circle(glow, (255, 240, 190, 70), (glow_r, glow_r), int(glow_r*0.55))
-                surf.blit(glow, (x - glow_r, (yy - pole_h) - glow_r))
-            else:
-                pygame.draw.circle(surf, (120, 120, 125), (x, yy - pole_h), head_r)
+                # cono di luce verso la strada (sotto e verso il centro)
+                cone_h = int(lerp(22, 62, t))
+                cone_w = int(lerp(18, 70, t))
+                alpha = 55  # abbastanza visibile ma non brucia
+
+                cone = pygame.Surface((cone_w*2, cone_h), pygame.SRCALPHA)
+                # triangolo invertito
+                pygame.draw.polygon(
+                    cone,
+                    (255, 235, 170, alpha),
+                    [(cone_w, 0), (0, cone_h), (cone_w*2, cone_h)]
+                )
+                # ammorbidisci un po' con un secondo layer
+                pygame.draw.polygon(
+                    cone,
+                    (255, 235, 170, int(alpha * 0.55)),
+                    [(cone_w, 0), (int(cone_w*0.25), cone_h), (int(cone_w*1.75), cone_h)]
+                )
+
+                surf.blit(cone, (lamp_x - cone_w, lamp_y))
 
 def draw_road(surf, t_ms, is_night):
     far_half = ROAD_FAR_W / 2
@@ -139,7 +177,7 @@ def draw_road(surf, t_ms, is_night):
         (WIDTH/2 - near_half, BOTTOM_Y),
     ]
 
-    asphalt = (98, 98, 104) if not is_night else (55, 55, 60)
+    asphalt = (110, 110, 116) if not is_night else (58, 58, 62)
     pygame.draw.polygon(surf, asphalt, pts)
 
     edge = (245, 245, 245) if not is_night else (210, 210, 210)
@@ -148,10 +186,10 @@ def draw_road(surf, t_ms, is_night):
 
     # linea centrale nera
     dash_len, gap = 26, 18
-    offset = int((t_ms * 0.28) % (dash_len + gap))
-    for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + 120, dash_len + gap):
+    offset = int((t_ms * 0.32) % (dash_len + gap))
+    for y in range(HORIZON_Y + 8, int(BOTTOM_Y) + 140, dash_len + gap):
         yy = y + offset
-        pygame.draw.rect(surf, (15, 15, 15), (WIDTH/2 - 3, yy, 6, dash_len), border_radius=3)
+        pygame.draw.rect(surf, (10, 10, 10), (WIDTH/2 - 3, yy, 6, dash_len), border_radius=3)
 
     draw_lamps(surf, is_night, t_ms)
 
@@ -183,11 +221,10 @@ def draw_circle_button(surf, center, radius, label, active=False):
 def draw_touch_overlay(surf, left, right, jump, show_restart, restart_active):
     z = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     if left:
-        pygame.draw.rect(z, (255, 255, 255, 16), LEFT_ZONE)
+        pygame.draw.rect(z, (255, 255, 255, 14), LEFT_ZONE)
     if right:
-        pygame.draw.rect(z, (255, 255, 255, 16), RIGHT_ZONE)
+        pygame.draw.rect(z, (255, 255, 255, 14), RIGHT_ZONE)
     surf.blit(z, (0, 0))
-
     draw_circle_button(surf, JUMP_C, BTN_R, "JUMP", active=jump)
     if show_restart:
         draw_circle_button(surf, RESTART_C, BTN_R, "R", active=restart_active)
@@ -199,9 +236,7 @@ class Player:
     def __init__(self):
         self.lane_x = 0.0
         self.steer_speed = 1.75
-
-        # sposto il player leggermente più in basso per seguire la nuova prospettiva
-        self.y = int(HEIGHT * 0.86)  # era 0.82
+        self.y = int(HEIGHT * 0.875)  # un po' più in basso
 
         self.air = 0.0
         self.v_air = 0.0
@@ -239,7 +274,7 @@ class Player:
         img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
         img = rotate(img, SPRITE_ROT_DEG)
 
-        lift = int(85 * self.air)
+        lift = int(80 * self.air)
         surf.blit(img, img.get_rect(center=(x, self.y - lift)))
 
 class Thing:
@@ -259,16 +294,13 @@ class Thing:
         return self.d < -0.20
 
     def screen_pos_and_scale(self):
-        # con l'orizzonte più basso, stringo un po' il range e porto il "near"
-        # più in basso, così la prospettiva resta credibile.
         t = clamp(1.0 - self.d, 0.0, 1.0)
-        y = lerp(HORIZON_Y + 8, int(HEIGHT * 0.86), t)
+        y = lerp(HORIZON_Y + 6, int(HEIGHT * 0.875), t)
 
         half = road_half_width_at_y(y)
         x = WIDTH/2 + self.lane_x * half
 
-        # scale aggiornato: leggermente più grande vicino
-        scale = lerp(0.18, 0.92, t)
+        scale = lerp(0.18, 0.96, t)  # un filo più grande vicino, coerente con strada più larga
         return int(x), int(y), scale
 
     def draw(self, surf):
@@ -432,7 +464,7 @@ async def main():
 
             if is_night:
                 overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-                overlay.fill((0, 0, 0, 120))
+                overlay.fill((0, 0, 0, 125))
                 screen.blit(overlay, (0, 0))
 
             draw_road(screen, now, is_night)
