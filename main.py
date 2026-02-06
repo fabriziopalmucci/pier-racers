@@ -10,20 +10,20 @@ import traceback
 WIDTH, HEIGHT = 900, 600
 FPS = 60
 
-# Strada: fine (orizzonte) a metà schermo
-HORIZON_Y = int(HEIGHT * 0.50)
+# Strada: fine (orizzonte) un po' PIÙ BASSA del centro (abbassata rispetto a prima)
+HORIZON_Y = int(HEIGHT * 0.56)
 BOTTOM_Y  = int(HEIGHT * 0.985)
 
-# Strada: più larga sotto, più stretta sopra (circa metà rispetto a prima)
-ROAD_NEAR_W = int(WIDTH * 1.28)   # più larga in basso
-ROAD_FAR_W  = int(WIDTH * 0.15)   # più stretta in alto (~ metà della precedente)
+# Strada: più larga sotto, più stretta sopra
+ROAD_NEAR_W = int(WIDTH * 1.32)
+ROAD_FAR_W  = int(WIDTH * 0.14)
 
 SPAWN_MS = 520
 RAMP_CHANCE = 0.25
 
 SPRITE_ROT_DEG = 0
 
-# Giorno/notte
+# Giorno/notte: cambia DURANTE la partita
 DAY_NIGHT_PERIOD_S = 60
 
 # -----------------------------
@@ -31,7 +31,7 @@ DAY_NIGHT_PERIOD_S = 60
 # -----------------------------
 pygame.init()
 try:
-    pygame.mixer.quit()  # riduce problemi "Ready to start" su iPhone
+    pygame.mixer.quit()  # aiuta su iPhone (autoplay audio)
 except Exception:
     pass
 
@@ -48,6 +48,7 @@ def draw_text(surf, text, x, y, color=(255, 255, 255), center=False, fnt=None):
     fnt = fnt or font
     img = fnt.render(text, True, color)
     rect = img.get_rect()
+    rect.center = (x, y) if center else rect.move(x, y).topleft
     if center:
         rect.center = (x, y)
     else:
@@ -69,7 +70,6 @@ def load_png(filename, fallback_size, color, colorkey=None):
     except Exception:
         surf = pygame.Surface(fallback_size, pygame.SRCALPHA)
         pygame.draw.rect(surf, color, (0, 0, fallback_size[0], fallback_size[1]), border_radius=12)
-        pygame.draw.rect(surf, (20, 20, 20), (10, 12, fallback_size[0]-20, 22), border_radius=10)
         return surf
 
 def load_bg(filename):
@@ -87,90 +87,88 @@ def rotate(img, deg):
 
 PLAYER_IMG = load_png("car_player.png", (260, 220), (220, 40, 40), colorkey=None)
 RAMP_IMG   = load_png("ramp_blue.png",  (280, 200), (70, 130, 255), colorkey=None)
-SUV1_IMG   = load_png("suv_black_1.png", (260, 220), (35, 35, 40), colorkey=None)
-SUV2_IMG   = load_png("suv_green.png",   (260, 220), (20, 180, 80), colorkey=None)
+SUV1_IMG   = load_png("suv_black_1.png",(260, 220), (35, 35, 40), colorkey=None)
+SUV2_IMG   = load_png("suv_green.png",  (260, 220), (20, 180, 80), colorkey=None)
+
+# nuovo lampione sprite (L-shape)
+LAMP_IMG   = load_png("lamppost_L.png", (256, 256), (90, 90, 95), colorkey=None)
 
 BG_IMG     = load_bg("nyc_bg.png")
 
 # -----------------------------
-# Road geometry (prospettiva curva stile urbano)
+# Road geometry
 # -----------------------------
 def road_half_width_at_y(y):
-    # Curva prospettica: più "stretta" in alto, larghissima in basso
     t = clamp((y - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
     t2 = t ** 0.55
     w = ROAD_FAR_W + (ROAD_NEAR_W - ROAD_FAR_W) * t2
     return w / 2
 
 # -----------------------------
-# Lampioni a L + luce notturna
+# Lampioni + luci (sprite)
 # -----------------------------
 def draw_lamps_and_lights(surf, is_night, t_ms):
-    step = 150
+    step = 170
     scroll = int((t_ms * 0.12) % step)
 
-    for y in range(HORIZON_Y + 20, int(BOTTOM_Y) + step, step):
+    for y in range(HORIZON_Y + 25, int(BOTTOM_Y) + step, step):
         yy = y + scroll
-        if yy < HORIZON_Y + 20 or yy > BOTTOM_Y:
+        if yy < HORIZON_Y + 25 or yy > BOTTOM_Y:
             continue
 
         half = road_half_width_at_y(yy)
-        left_base_x  = int(WIDTH/2 - half)
-        right_base_x = int(WIDTH/2 + half)
-        base_y = int(yy)
 
+        # base sulla linea bianca (leggermente DENTRO, così non "esce")
         t = clamp((yy - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
         t2 = t ** 0.60
 
-        pole_h = int(lerp(110, 260, t2))  # alti
-        pole_w = max(3, int(lerp(3, 6, t2)))
+        inset = int(lerp(6, 16, t2))  # più inset verso il basso
+        left_base_x  = int(WIDTH/2 - half + inset)
+        right_base_x = int(WIDTH/2 + half - inset)
 
-        arm_len  = int(lerp(34, 95, t2))
-        arm_drop = int(lerp(18, 42, t2))
+        base_y = int(yy)
 
-        for base_x, side in ((left_base_x, "L"), (right_base_x, "R")):
-            # palo
-            pygame.draw.rect(
-                surf, (60, 60, 66),
-                (base_x - pole_w//2, base_y - pole_h, pole_w, pole_h),
-                border_radius=2
-            )
+        # scala sprite: molto più alto verso il basso
+        s = lerp(0.20, 0.55, t2)
+        lamp_w = int(LAMP_IMG.get_width() * s)
+        lamp_h = int(LAMP_IMG.get_height() * s)
+        lamp_scaled = pygame.transform.smoothscale(LAMP_IMG, (lamp_w, lamp_h))
 
-            # braccio a L verso la strada
-            arm_y = base_y - pole_h + int(pole_h * 0.22)
-            arm_x = base_x + arm_len if side == "L" else base_x - arm_len
-            pygame.draw.line(surf, (60, 60, 66), (base_x, arm_y), (arm_x, arm_y), pole_w)
+        # lampione destro = flip
+        lamp_right = pygame.transform.flip(lamp_scaled, True, False)
 
-            lamp_x = arm_x
-            lamp_y = arm_y + arm_drop
-            head_r = max(4, int(lerp(4, 7, t2)))
+        # posizionamento: sprite ha base verso il basso, quindi allineo il "bottom"
+        rectL = lamp_scaled.get_rect()
+        rectL.midbottom = (left_base_x, base_y)
 
-            # testa lampione
-            pygame.draw.circle(
-                surf,
-                (255, 245, 210) if is_night else (150, 150, 155),
-                (lamp_x, lamp_y),
-                head_r
-            )
+        rectR = lamp_right.get_rect()
+        rectR.midbottom = (right_base_x, base_y)
 
-            if is_night:
-                # CONO LUCE: più forte e "vince" sulla notte
-                cone_h = int(lerp(90, 240, t2))
-                cone_w = int(lerp(70, 220, t2))
+        surf.blit(lamp_scaled, rectL)
+        surf.blit(lamp_right, rectR)
+
+        if is_night:
+            # luce: cono sotto la testa lampione
+            # stimo la testa come punto vicino al braccio (sufficientemente ok visivamente)
+            headL = (rectL.centerx + int(lamp_w * 0.22), rectL.top + int(lamp_h * 0.40))
+            headR = (rectR.centerx - int(lamp_w * 0.22), rectR.top + int(lamp_h * 0.40))
+
+            cone_h = int(lerp(90, 250, t2))
+            cone_w = int(lerp(90, 260, t2))
+
+            for (hx, hy) in (headL, headR):
                 cone = pygame.Surface((cone_w, cone_h), pygame.SRCALPHA)
-
                 pygame.draw.polygon(
                     cone,
-                    (255, 235, 170, 105),
+                    (255, 235, 170, 120),
                     [(cone_w//2, 0), (0, cone_h), (cone_w, cone_h)]
                 )
                 pygame.draw.polygon(
                     cone,
-                    (255, 235, 170, 60),
-                    [(cone_w//2, 0), (int(cone_w*0.20), cone_h), (int(cone_w*0.80), cone_h)]
+                    (255, 235, 170, 70),
+                    [(cone_w//2, 0), (int(cone_w*0.18), cone_h), (int(cone_w*0.82), cone_h)]
                 )
-
-                surf.blit(cone, (lamp_x - cone_w//2, lamp_y))
+                surf.blit(cone, (hx - cone_w//2, hy))
 
 # -----------------------------
 # Road drawing
@@ -186,11 +184,9 @@ def draw_road(surf, t_ms, is_night):
         (WIDTH/2 - near_half, BOTTOM_Y),
     ]
 
-    # Asfalto più chiaro di giorno, più scuro di notte
-    asphalt = (140, 140, 146) if not is_night else (70, 70, 74)
+    asphalt = (150, 150, 156) if not is_night else (72, 72, 78)
     pygame.draw.polygon(surf, asphalt, pts)
 
-    # bordi
     edge = (245, 245, 245) if not is_night else (210, 210, 210)
     pygame.draw.line(surf, edge, pts[0], pts[3], 6)
     pygame.draw.line(surf, edge, pts[1], pts[2], 6)
@@ -208,13 +204,11 @@ def draw_road(surf, t_ms, is_night):
 LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
 RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
 
-BTN_R = int(min(WIDTH, HEIGHT) * 0.11)  # grandi
-
-# Pulsanti più in ALTO (non coprono più la strada)
-JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.66))
+BTN_R = int(min(WIDTH, HEIGHT) * 0.11)
+JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.62))     # più su
 JUMP_BTN = pygame.Rect(JUMP_C[0] - BTN_R, JUMP_C[1] - BTN_R, BTN_R*2, BTN_R*2)
 
-RESTART_C = (int(WIDTH * 0.12), int(HEIGHT * 0.66))
+RESTART_C = (int(WIDTH * 0.12), int(HEIGHT * 0.62))  # più su
 RESTART_BTN = pygame.Rect(RESTART_C[0] - BTN_R, RESTART_C[1] - BTN_R, BTN_R*2, BTN_R*2)
 
 def finger_to_xy(x_norm, y_norm):
@@ -228,13 +222,7 @@ def draw_circle_button(surf, center, radius, label, active=False):
     surf.blit(btn, (cx - radius, cy - radius))
     draw_text(surf, label, cx, cy, center=True, color=(255, 255, 255), fnt=font)
 
-def draw_touch_overlay(surf, left, right, jump, show_restart, restart_active):
-    # (opzionale) overlay leggero debug aree
-    # z = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    # if left:  pygame.draw.rect(z, (255, 255, 255, 10), LEFT_ZONE)
-    # if right: pygame.draw.rect(z, (255, 255, 255, 10), RIGHT_ZONE)
-    # surf.blit(z, (0, 0))
-
+def draw_touch_overlay(surf, jump, show_restart, restart_active):
     draw_circle_button(surf, JUMP_C, BTN_R, "JUMP", active=jump)
     if show_restart:
         draw_circle_button(surf, RESTART_C, BTN_R, "R", active=restart_active)
@@ -283,8 +271,8 @@ class Player:
         img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
         img = rotate(img, SPRITE_ROT_DEG)
 
-        # nessuna ombra
-        lift = int(78 * self.air)
+        # niente ombra, e "lift" più coerente
+        lift = int(72 * self.air)
         surf.blit(img, img.get_rect(center=(x, self.y - lift)))
 
 class Thing:
@@ -305,7 +293,7 @@ class Thing:
 
     def screen_pos_and_scale(self):
         t = clamp(1.0 - self.d, 0.0, 1.0)
-        y = lerp(HORIZON_Y + 10, int(HEIGHT * 0.88), t)
+        y = lerp(HORIZON_Y + 10, int(HEIGHT * 0.90), t)
 
         half = road_half_width_at_y(y)
         x = WIDTH/2 + self.lane_x * half
@@ -340,12 +328,13 @@ class Thing:
 # Game state
 # -----------------------------
 def reset():
+    now = pygame.time.get_ticks()
     return {
         "player": Player(),
         "things": [],
         "score": 0.0,
-        "start_ms": pygame.time.get_ticks(),
-        "last_spawn": pygame.time.get_ticks(),
+        "start_ms": now,          # per ciclo giorno/notte “per partita”
+        "last_spawn": now,
         "game_over": False,
     }
 
@@ -366,8 +355,9 @@ async def main():
             dt = clock.tick(FPS) / 1000.0
             now = pygame.time.get_ticks()
 
-            seconds = (now // 1000) % (DAY_NIGHT_PERIOD_S * 2)
-            is_night = (seconds >= DAY_NIGHT_PERIOD_S)
+            # ciclo giorno/notte basato sull’elapsed della partita
+            match_elapsed_s = (now - state["start_ms"]) / 1000.0
+            is_night = (int(match_elapsed_s // DAY_NIGHT_PERIOD_S) % 2) == 1
 
             # start screen
             if not started:
@@ -486,8 +476,7 @@ async def main():
             # -----------------------------
             screen.blit(BG_IMG, (0, 0))
 
-            # Giorno più luminoso: nessun overlay scuro.
-            # Notte: overlay scuro moderato (così le luci lampioni risaltano)
+            # Notte: overlay scuro
             if is_night:
                 overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
                 overlay.fill((0, 0, 0, 150))
@@ -495,7 +484,7 @@ async def main():
 
             draw_road(screen, now, is_night)
 
-            # Lampioni e luci: disegnati DOPO overlay, così illuminano la strada
+            # luci sopra overlay (illuminano)
             draw_lamps_and_lights(screen, is_night, now)
 
             for th in sorted(state["things"], key=lambda t: t.d, reverse=True):
@@ -503,14 +492,13 @@ async def main():
 
             state["player"].draw(screen)
 
-            # HUD
             hud_color = (10, 10, 10) if not is_night else (240, 240, 240)
             draw_text(screen, "RIDERS", 18, 12, color=hud_color)
             draw_text(screen, f"{'Night' if is_night else 'Day'} | Score: {int(state['score'])}", 18, 38, color=hud_color)
 
             draw_touch_overlay(
                 screen,
-                pressed_left, pressed_right, pressed_jump,
+                jump=pressed_jump,
                 show_restart=state["game_over"],
                 restart_active=pressed_restart
             )
