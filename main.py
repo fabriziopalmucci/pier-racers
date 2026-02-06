@@ -10,25 +10,30 @@ import traceback
 WIDTH, HEIGHT = 900, 600
 FPS = 60
 
-HORIZON_Y = int(HEIGHT * 0.28)
+# Prospettiva: abbasso l'orizzonte così la strada "finisce" più in basso,
+# verso la base dei grattacieli
+HORIZON_Y = int(HEIGHT * 0.45)   # prima ~0.28
 BOTTOM_Y  = int(HEIGHT * 0.98)
+
 ROAD_NEAR_W = int(WIDTH * 0.80)
-ROAD_FAR_W  = int(WIDTH * 0.18)
+ROAD_FAR_W  = int(WIDTH * 0.22)  # leggermente più larga per prospettiva più naturale
 
 SPAWN_MS = 520
 RAMP_CHANCE = 0.25
 SPRITE_ROT_DEG = 0
 
+DAY_NIGHT_PERIOD_S = 60  # ogni 60s cambia
+# -----------------------------
+
 pygame.init()
 
-# IMPORTANT: per iPhone/Safari, spesso “Ready to start” dipende dall'audio
-# Se non ti serve audio, meglio disattivarlo: riduce i blocchi.
+# iPhone/Safari: riduce i blocchi "Ready to start" se non usi audio
 try:
     pygame.mixer.quit()
 except Exception:
     pass
 
-pygame.display.set_caption("Riders - NYC Day (Web)")
+pygame.display.set_caption("Riders - NYC Day/Night (Web)")
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 24)
@@ -92,7 +97,51 @@ def road_half_width_at_y(y):
     w = lerp(ROAD_FAR_W, ROAD_NEAR_W, t)
     return w / 2
 
-def draw_road(surf, t_ms):
+def draw_lamps(surf, is_night, t_ms):
+    """
+    Lampioni ai lati strada.
+    Di giorno: solo lampioni (più discreti)
+    Di notte: luce + alone che illumina la strada
+    """
+    # distanza lampioni lungo la strada (screen space)
+    step = 70
+    # piccola animazione "scorrimento" coerente con dashes (opzionale)
+    scroll = int((t_ms * 0.10) % step)
+
+    for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + step, step):
+        yy = y + scroll
+        if yy < HORIZON_Y + 8 or yy > BOTTOM_Y + 40:
+            continue
+
+        half = road_half_width_at_y(yy)
+        # bordo strada + un piccolo offset verso l'esterno
+        left_x  = int(WIDTH/2 - half - 18)
+        right_x = int(WIDTH/2 + half + 18)
+
+        # scala prospettica (lampioni più piccoli lontano)
+        t = clamp((yy - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
+        pole_h = int(lerp(22, 62, t))
+        pole_w = max(2, int(lerp(1, 4, t)))
+        head_r = max(3, int(lerp(3, 7, t)))
+
+        # palo (sinistra e destra)
+        for x in (left_x, right_x):
+            pygame.draw.rect(surf, (55, 55, 60), (x - pole_w//2, yy - pole_h, pole_w, pole_h), border_radius=2)
+
+            # testa lampione
+            if is_night:
+                pygame.draw.circle(surf, (255, 245, 200), (x, yy - pole_h), head_r)
+                # alone
+                glow_r = int(head_r * 10)
+                glow = pygame.Surface((glow_r*2, glow_r*2), pygame.SRCALPHA)
+                pygame.draw.circle(glow, (255, 240, 190, 40), (glow_r, glow_r), glow_r)
+                # un secondo alone più forte
+                pygame.draw.circle(glow, (255, 240, 190, 70), (glow_r, glow_r), int(glow_r*0.55))
+                surf.blit(glow, (x - glow_r, (yy - pole_h) - glow_r))
+            else:
+                pygame.draw.circle(surf, (120, 120, 125), (x, yy - pole_h), head_r)
+
+def draw_road(surf, t_ms, is_night):
     far_half = ROAD_FAR_W / 2
     near_half = ROAD_NEAR_W / 2
 
@@ -102,16 +151,25 @@ def draw_road(surf, t_ms):
         (WIDTH/2 + near_half, BOTTOM_Y),
         (WIDTH/2 - near_half, BOTTOM_Y),
     ]
-    pygame.draw.polygon(surf, (70, 70, 75), pts)
-    pygame.draw.line(surf, (245, 245, 245), pts[0], pts[3], 6)
-    pygame.draw.line(surf, (245, 245, 245), pts[1], pts[2], 6)
 
+    # asfalto un po' più chiaro (si distinguono meglio le auto)
+    asphalt = (92, 92, 98) if not is_night else (55, 55, 60)
+    pygame.draw.polygon(surf, asphalt, pts)
+
+    # linee bordi
+    edge = (245, 245, 245) if not is_night else (210, 210, 210)
+    pygame.draw.line(surf, edge, pts[0], pts[3], 6)
+    pygame.draw.line(surf, edge, pts[1], pts[2], 6)
+
+    # linea centrale: NERA (richiesta)
     dash_len, gap = 26, 18
-    # direzione “giusta”: le righe devono venire verso il basso
     offset = int((t_ms * 0.28) % (dash_len + gap))
-    for y in range(HORIZON_Y + 15, int(BOTTOM_Y) + 120, dash_len + gap):
+    for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + 120, dash_len + gap):
         yy = y + offset
-        pygame.draw.rect(surf, (235, 235, 90), (WIDTH/2 - 4, yy, 8, dash_len), border_radius=4)
+        pygame.draw.rect(surf, (15, 15, 15), (WIDTH/2 - 3, yy, 6, dash_len), border_radius=3)
+
+    # lampioni sopra la strada
+    draw_lamps(surf, is_night, t_ms)
 
 # -----------------------------
 # Touch UI
@@ -119,7 +177,8 @@ def draw_road(surf, t_ms):
 LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
 RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
 
-BTN_R = int(min(WIDTH, HEIGHT) * 0.055)
+# Pulsanti doppi (2x)
+BTN_R = int(min(WIDTH, HEIGHT) * 0.11)   # prima ~0.055
 
 JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.82))
 JUMP_BTN = pygame.Rect(JUMP_C[0] - BTN_R, JUMP_C[1] - BTN_R, BTN_R*2, BTN_R*2)
@@ -133,17 +192,17 @@ def finger_to_xy(x_norm, y_norm):
 def draw_circle_button(surf, center, radius, label, active=False):
     cx, cy = center
     btn = pygame.Surface((radius*2, radius*2), pygame.SRCALPHA)
-    pygame.draw.circle(btn, (0, 0, 0, 95 if not active else 140), (radius, radius), radius)
-    pygame.draw.circle(btn, (255, 255, 255, 160), (radius, radius), radius-3, width=3)
+    pygame.draw.circle(btn, (0, 0, 0, 100 if not active else 160), (radius, radius), radius)
+    pygame.draw.circle(btn, (255, 255, 255, 170), (radius, radius), radius-4, width=4)
     surf.blit(btn, (cx - radius, cy - radius))
-    draw_text(surf, label, cx, cy-8, center=True, color=(255,255,255))
+    draw_text(surf, label, cx, cy-10, center=True, color=(255,255,255), fnt=font)
 
 def draw_touch_overlay(surf, left, right, jump, show_restart, restart_active):
     z = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     if left:
-        pygame.draw.rect(z, (255, 255, 255, 18), LEFT_ZONE)
+        pygame.draw.rect(z, (255, 255, 255, 16), LEFT_ZONE)
     if right:
-        pygame.draw.rect(z, (255, 255, 255, 18), RIGHT_ZONE)
+        pygame.draw.rect(z, (255, 255, 255, 16), RIGHT_ZONE)
     surf.blit(z, (0, 0))
 
     draw_circle_button(surf, JUMP_C, BTN_R, "JUMP", active=jump)
@@ -158,7 +217,7 @@ class Player:
         self.lane_x = 0.0
         self.steer_speed = 1.75
 
-        # più vicino alla zona dei SUV -> meno effetto “hover”
+        # allineata alla "zona SUV"
         self.y = int(HEIGHT * 0.82)
 
         self.air = 0.0
@@ -167,7 +226,6 @@ class Player:
         self.jump_strength = 1.35
         self.on_ground = True
 
-        # ridotta (come avevi voluto)
         self.visual_scale = 0.27
 
     def jump(self, mult=1.0):
@@ -193,14 +251,7 @@ class Player:
     def draw(self, surf):
         x = self.screen_x()
 
-        # shadow più vicino: meno sensazione di “sospeso”
-        shadow_scale = 1.0 - self.air * 0.25
-        sw = int(105 * shadow_scale)
-        sh = int(32 * shadow_scale)
-        shadow = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        pygame.draw.ellipse(shadow, (0, 0, 0, 120), (0, 0, sw, sh))
-        surf.blit(shadow, shadow.get_rect(center=(x, self.y + 48)))
-
+        # Ombra rimossa (richiesta): niente effetto sospesa
         base_w = int(PLAYER_IMG.get_width() * self.visual_scale)
         base_h = int(PLAYER_IMG.get_height() * self.visual_scale)
         img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
@@ -228,7 +279,7 @@ class Thing:
 
     def screen_pos_and_scale(self):
         t = clamp(1.0 - self.d, 0.0, 1.0)
-        y = lerp(HORIZON_Y + 20, int(HEIGHT * 0.82), t)
+        y = lerp(HORIZON_Y + 10, int(HEIGHT * 0.82), t)
         half = road_half_width_at_y(y)
         x = WIDTH/2 + self.lane_x * half
         scale = lerp(0.20, 0.85, t)
@@ -273,13 +324,10 @@ def reset():
 async def main():
     state = reset()
     runtime_error = None
-
     started = False
 
-    # TOUCH TRACKING: mantiene la pressione finché non arriva FINGERUP
+    # Touch hold tracking
     active_fingers = {}  # finger_id -> (x,y)
-
-    # mouse holding (desktop)
     mouse_down = False
     mouse_pos = (0, 0)
 
@@ -288,13 +336,16 @@ async def main():
             dt = clock.tick(FPS) / 1000.0
             now = pygame.time.get_ticks()
 
-            # ---------- Start gate (affidabile su iPhone) ----------
+            # Giorno/notte
+            seconds = (now // 1000) % (DAY_NIGHT_PERIOD_S * 2)
+            is_night = (seconds >= DAY_NIGHT_PERIOD_S)
+
+            # Start gate
             if not started:
                 screen.fill((0, 0, 0))
                 draw_text(screen, "RIDERS", WIDTH//2, HEIGHT//2 - 40, center=True, fnt=big_font)
                 draw_text(screen, "TAP TO START", WIDTH//2, HEIGHT//2 + 10, center=True, color=(180, 180, 180))
                 pygame.display.flip()
-
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         return
@@ -303,19 +354,18 @@ async def main():
                 await asyncio.sleep(0)
                 continue
 
-            # ---------- events ----------
+            # Events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
 
-                # Desktop keys
                 if event.type == pygame.KEYDOWN:
                     if not state["game_over"] and event.key == pygame.K_SPACE:
                         state["player"].jump(mult=1.0)
                     elif state["game_over"] and event.key == pygame.K_r:
                         state = reset()
 
-                # Mouse hold
+                # mouse
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_down = True
                     mouse_pos = event.pos
@@ -324,7 +374,7 @@ async def main():
                 elif event.type == pygame.MOUSEBUTTONUP:
                     mouse_down = False
 
-                # Fingers hold (mobile)
+                # touch
                 if event.type == pygame.FINGERDOWN:
                     fid = getattr(event, "finger_id", 0)
                     active_fingers[fid] = finger_to_xy(event.x, event.y)
@@ -336,10 +386,9 @@ async def main():
                     fid = getattr(event, "finger_id", 0)
                     active_fingers.pop(fid, None)
 
-            # ---------- input state (continuous hold) ----------
+            # Input
             pressed_left = pressed_right = pressed_jump = pressed_restart = False
 
-            # keyboard steer baseline
             keys = pygame.key.get_pressed()
             steer_dir = 0.0
             if keys[pygame.K_a] or keys[pygame.K_LEFT]:
@@ -347,7 +396,6 @@ async def main():
             if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
                 steer_dir += 1.0
 
-            # consider all active pointers (fingers + mouse)
             pointers = []
             if mouse_down:
                 pointers.append(mouse_pos)
@@ -363,19 +411,18 @@ async def main():
                 if state["game_over"] and RESTART_BTN.collidepoint(mx, my):
                     pressed_restart = True
 
-            # touch overrides steer (hold-friendly)
             if pressed_left and not pressed_right:
                 steer_dir = -1.0
             elif pressed_right and not pressed_left:
                 steer_dir = 1.0
 
-            # touch actions
             if pressed_jump and (not state["game_over"]):
                 state["player"].jump(mult=1.0)
+
             if pressed_restart and state["game_over"]:
                 state = reset()
 
-            # ---------- game update ----------
+            # Update
             elapsed = (now - state["start_ms"]) / 1000.0
             speed = 0.85 + 0.020 * elapsed
 
@@ -393,7 +440,7 @@ async def main():
                 for th in list(state["things"]):
                     if th.collides_with_player(state["player"]):
                         if th.kind == "ramp":
-                            state["player"].jump(mult=2.2)  # salto alto
+                            state["player"].jump(mult=2.2)
                             state["things"].remove(th)
                         else:
                             if state["player"].air > 0.28:
@@ -403,18 +450,32 @@ async def main():
                 state["things"] = [t for t in state["things"] if not t.is_dead()]
                 state["score"] += (speed * 120) * dt
 
-            # ---------- draw ----------
+            # Draw background
             screen.blit(BG_IMG, (0, 0))
-            draw_road(screen, now)
 
+            # Night overlay (prima della strada) per scurire skyline e scena
+            if is_night:
+                overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 120))
+                screen.blit(overlay, (0, 0))
+
+            # Road + lamps
+            draw_road(screen, now, is_night)
+
+            # Obstacles
             for th in sorted(state["things"], key=lambda t: t.d, reverse=True):
                 th.draw(screen)
 
+            # Player
             state["player"].draw(screen)
 
-            draw_text(screen, "RIDERS", 18, 12, color=(0, 0, 0))
-            draw_text(screen, f"Score: {int(state['score'])}", 18, 40, color=(0, 0, 0))
+            # HUD
+            draw_text(screen, "RIDERS", 18, 12, color=(0, 0, 0) if not is_night else (240, 240, 240))
+            label = "Night" if is_night else "Day"
+            draw_text(screen, f"{label} | Score: {int(state['score'])}", 18, 40,
+                      color=(0, 0, 0) if not is_night else (240, 240, 240))
 
+            # Touch overlay
             draw_touch_overlay(
                 screen,
                 pressed_left, pressed_right, pressed_jump,
@@ -423,13 +484,15 @@ async def main():
             )
 
             if state["game_over"]:
-                draw_text(screen, "GAME OVER", WIDTH//2, HEIGHT//2 - 35, center=True, fnt=big_font, color=(0, 0, 0))
-                draw_text(screen, "Tap R (or press R) to restart", WIDTH//2, HEIGHT//2 + 20, center=True, color=(0, 0, 0))
+                draw_text(screen, "GAME OVER", WIDTH//2, HEIGHT//2 - 35, center=True,
+                          fnt=big_font, color=(0, 0, 0) if not is_night else (240, 240, 240))
+                draw_text(screen, "Tap R (or press R) to restart", WIDTH//2, HEIGHT//2 + 20,
+                          center=True, color=(0, 0, 0) if not is_night else (240, 240, 240))
 
             if runtime_error:
-                overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-                overlay.fill((0, 0, 0, 190))
-                screen.blit(overlay, (0, 0))
+                ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                ov.fill((0, 0, 0, 190))
+                screen.blit(ov, (0, 0))
                 draw_text(screen, "RUNTIME ERROR", 18, 18, color=(255, 120, 120))
                 y = 52
                 for line in runtime_error.splitlines()[:18]:
