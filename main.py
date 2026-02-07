@@ -27,6 +27,10 @@ SPRITE_ROT_DEG = 0
 DAY_NIGHT_PERIOD_S = 60.0
 DAY_NIGHT_FADE_S   = 3.0
 
+# Salti
+MANUAL_JUMP_MULT = 2.4   # <-- prima 1.0 (pulsante/spazio). Ora >=2x
+RAMP_JUMP_MULT   = 2.2   # salto su rampa (lasciato simile)
+
 # =============================
 # INIT
 # =============================
@@ -155,11 +159,9 @@ def soft_cone_light(w, h, intensity):
         return _cone_cache[key]
 
     s = pygame.Surface((w, h), pygame.SRCALPHA)
-
     cx = w // 2
     start_y = int(h * 0.04)
 
-    # vicino alla lampadina: poco raggio, poi cresce
     r0 = max(6, int(w * 0.035))
     r1 = max(18, int(w * 0.46))
 
@@ -246,8 +248,7 @@ class Player:
         h = int(PLAYER_IMG.get_height() * 0.27)
         self.img_base = pygame.transform.smoothscale(PLAYER_IMG, (w, h))
 
-        # steering visual
-        self.steer_vis = 0.0  # -1..+1 smoothing
+        self.steer_vis = 0.0
 
     def jump(self, m=1.0):
         if self.on_ground:
@@ -255,19 +256,26 @@ class Player:
             self.on_ground = False
 
     def _max_lane_x(self):
-        """Limita il player alla strada, tenendo conto della larghezza sprite."""
+        """
+        Ora la macchina può uscire un po' di più a sx/dx:
+        lasciamo andare oltre la riga bianca di ~0.9 larghezza auto (quasi una macchina),
+        ma senza sparire completamente (almeno un pezzo resta in strada).
+        """
         half = road_half_width_at_y(self.y)
         sprite_half = self.img_base.get_width() / 2
-        margin = 8  # piccolo margine interno
-        usable = max(10.0, half - sprite_half - margin)
-        return clamp(usable / half, 0.15, 0.98)
+
+        # prima era molto più restrittivo; ora permettiamo "quasi una macchina" oltre.
+        extra = sprite_half * 0.90  # <-- quasi larghezza auto
+        margin = 6                 # lascia almeno un filo di contatto
+
+        # "spazio utilizzabile" per il centro della macchina
+        usable = max(10.0, (half + extra) - sprite_half - margin)
+        return clamp(usable / half, 0.15, 1.25)  # può superare 1.0 (oltre bordo strada)
 
     def update(self, dt, steer):
-        # clamp dinamico: non esce completamente dalla strada
         max_lane = self._max_lane_x()
         self.lane_x = clamp(self.lane_x + steer * 1.75 * dt, -max_lane, max_lane)
 
-        # smoothing visivo sterzo
         target = clamp(steer, -1.0, 1.0)
         self.steer_vis = lerp(self.steer_vis, target, clamp(dt * 10.0, 0.0, 1.0))
 
@@ -285,11 +293,8 @@ class Player:
 
     def draw(self, s):
         lift = int(72 * self.air)
-
-        # ruota leggermente mentre sterzi (più realistico)
-        angle = -self.steer_vis * 12.0  # gradi
+        angle = -self.steer_vis * 12.0
         img = self.img_base if abs(angle) < 0.2 else pygame.transform.rotate(self.img_base, angle)
-
         s.blit(img, img.get_rect(center=(self.x(), self.y - lift)))
 
 class Thing:
@@ -298,17 +303,14 @@ class Thing:
         self.d = 1.0 + random.uniform(0.02, 0.15)
 
         if kind == "suv":
-            # Spawn più "centrale": gauss attorno a 0
             self.lane_x = clamp(random.gauss(0.0, 0.42), -0.95, 0.95)
             self.var = random.choice([1, 2])
 
-            # micro-movimenti (zigzag leggero + drift)
             self.lane_v = random.uniform(-0.08, 0.08)
-            self.wobble_amp = random.uniform(0.00, 0.06)   # piccolo
+            self.wobble_amp = random.uniform(0.00, 0.06)
             self.wobble_f   = random.uniform(0.8, 1.6)
             self.wobble_p   = random.uniform(0, math.tau)
         else:
-            # Ramp: tendenzialmente più centrale, ma non sempre
             self.lane_x = clamp(random.gauss(0.0, 0.35), -0.90, 0.90)
             self.var = 0
             self.lane_v = 0.0
@@ -316,7 +318,6 @@ class Thing:
             self.wobble_f = 0.0
             self.wobble_p = 0.0
 
-        # per oscillazione tempo
         self.t_alive = 0.0
 
     def update(self, dt, speed):
@@ -324,20 +325,13 @@ class Thing:
         self.t_alive += dt
 
         if self.kind == "suv":
-            # ogni tanto cambia direzione (poco) e tende verso il centro
             if random.random() < 0.015:
                 self.lane_v += random.uniform(-0.10, 0.10)
                 self.lane_v = clamp(self.lane_v, -0.20, 0.20)
 
-            # piccola “forza” verso centro
             self.lane_v += (-self.lane_x) * 0.06 * dt
-
-            # integra
             self.lane_x += self.lane_v * dt
-
-            # wobble morbido (zig zag leggerissimo)
             self.lane_x += math.sin(self.t_alive * self.wobble_f + self.wobble_p) * self.wobble_amp * dt
-
             self.lane_x = clamp(self.lane_x, -0.95, 0.95)
 
     def dead(self):
@@ -437,7 +431,7 @@ async def main():
 
                 if event.type == pygame.KEYDOWN:
                     if (not state["over"]) and event.key == pygame.K_SPACE:
-                        state["player"].jump(1.0)
+                        state["player"].jump(MANUAL_JUMP_MULT)
                     elif state["over"] and event.key == pygame.K_r:
                         state = reset()
 
@@ -490,7 +484,7 @@ async def main():
                 steer = 1.0
 
             if pressed_jump and (not state["over"]):
-                state["player"].jump(1.0)
+                state["player"].jump(MANUAL_JUMP_MULT)
 
             if pressed_restart and state["over"]:
                 state = reset()
@@ -512,10 +506,11 @@ async def main():
                 for th in list(state["things"]):
                     if th.hit(state["player"]):
                         if th.kind == "ramp":
-                            state["player"].jump(2.2)
+                            state["player"].jump(RAMP_JUMP_MULT)
                             state["things"].remove(th)
                         else:
-                            if state["player"].air > 0.28:
+                            # più permissivo: se stai saltando "abbastanza", passi sopra il SUV
+                            if state["player"].air > 0.16:
                                 continue
                             state["over"] = True
 
@@ -532,10 +527,10 @@ async def main():
 
             state["player"].draw(screen)
 
-            # overlay notte: meno buia di prima
+            # overlay notte: più chiaro
             if night > 0:
                 ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-                ov.fill((0, 0, 0, int(lerp(0, 70, night))))  # <-- era 95, ora più chiaro
+                ov.fill((0, 0, 0, int(lerp(0, 70, night))))
                 screen.blit(ov, (0, 0))
 
             hud_color = (10, 10, 10) if night < 0.5 else (240, 240, 240)
