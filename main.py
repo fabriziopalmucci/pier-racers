@@ -132,14 +132,13 @@ def night_factor(now_ms):
     t = (now_ms - APP_START_MS) / 1000.0
     half = DAY_NIGHT_PERIOD_S / 2.0
 
-    # giorno nella prima metà, notte nella seconda
     target = 0.0 if (t % DAY_NIGHT_PERIOD_S) < half else 1.0
     prev = 1.0 - target
 
     local = t % half
     if local < DAY_NIGHT_FADE_S:
         x = clamp(local / DAY_NIGHT_FADE_S, 0.0, 1.0)
-        x = 0.5 - 0.5 * math.cos(math.pi * x)  # smooth
+        x = 0.5 - 0.5 * math.cos(math.pi * x)
         return prev * (1 - x) + target * x
 
     return target
@@ -150,36 +149,25 @@ def night_factor(now_ms):
 _cone_cache = {}
 
 def soft_cone_light(w, h, intensity):
-    """
-    Crea un cono morbido:
-    - vicino alla lampadina: raggio piccolo e luminosità alta
-    - poi si apre gradualmente e svanisce dolcemente
-    """
     key = (w, h, intensity)
     if key in _cone_cache:
         return _cone_cache[key]
 
     s = pygame.Surface((w, h), pygame.SRCALPHA)
 
-    # centro del cono (x) e inizio (y) vicino alla lampadina
     cx = w // 2
     start_y = int(h * 0.04)
 
-    # parametri: piccolo vicino, poi cresce; fade dolce
     r0 = max(6, int(w * 0.04))
     r1 = max(18, int(w * 0.42))
 
     layers = 42
     for i in range(layers):
         t = i / (layers - 1)
-
-        # crescita del raggio: lenta all'inizio, poi più ampia
         grow = t ** 0.72
         r = int(lerp(r0, r1, grow))
-
         y = int(lerp(start_y, h - 1, t))
 
-        # luminosità: molto intensa all'inizio, poi decresce soft
         a = int(intensity * ((1.0 - t) ** 1.35))
         if a <= 0:
             continue
@@ -193,14 +181,9 @@ def soft_cone_light(w, h, intensity):
 # LAMPS
 # =============================
 def draw_lamps(surf, night, t_ms):
-    """
-    Lampioni disegnati già dall'orizzonte (HORIZON_Y) in giù,
-    così compaiono piccoli e poi crescono.
-    """
     step = 140
     scroll = int((t_ms * 0.12) % step)
 
-    # partire dall'orizzonte: così appaiono subito
     for y in range(HORIZON_Y + 10, int(BOTTOM_Y) + step, step):
         yy = y + scroll
         if yy < HORIZON_Y + 10 or yy > BOTTOM_Y:
@@ -214,10 +197,9 @@ def draw_lamps(surf, night, t_ms):
         lx = int(WIDTH/2 - half + inset)
         rx = int(WIDTH/2 + half - inset)
 
-        # base lampione sulla strada (non “sollevato”)
-        base_y = int(yy)
+        # ✅ FIX: abbassiamo il punto d’appoggio dei lampioni di ~15% schermo
+        base_y = min(int(yy + HEIGHT * 0.15), int(BOTTOM_Y))
 
-        # scala: piccolo in alto, grande in basso
         scale = lerp(0.10, 0.42, t2)
         w = max(8, int(LAMP_IMG.get_width() * scale))
         h = max(8, int(LAMP_IMG.get_height() * scale))
@@ -231,19 +213,15 @@ def draw_lamps(surf, night, t_ms):
         surf.blit(lamp, rL)
         surf.blit(lamp_r, rR)
 
-        # luci (solo se notte)
         if night > 0.02:
-            # intensità e raggio aumentano con la vicinanza (t2) + notte
             intensity = int(lerp(0, 155, night) * lerp(0.55, 1.05, t2))
             intensity = clamp(intensity, 0, 170)
 
-            # cono più lungo del 30%
             cone_h = int(lerp(140, 520, t2) * 1.30)
             cone_w = int(lerp(120, 520, t2) * 1.15)
 
             cone = soft_cone_light(cone_w, cone_h, intensity)
 
-            # posizione lampadina (simile a prima)
             headL = (rL.centerx + int(w * 0.26), rL.top + int(h * 0.36))
             headR = (rR.centerx - int(w * 0.26), rR.top + int(h * 0.36))
 
@@ -305,7 +283,6 @@ class Thing:
         return self.d < -0.2
 
     def pos(self):
-        # parte dal punto dove finisce la strada (HORIZON_Y + un filo)
         t = clamp(1.0 - self.d, 0.0, 1.0)
         y = int(lerp(HORIZON_Y + 10, HEIGHT * 0.90, t))
         x = int(WIDTH/2 + self.lane_x * road_half_width_at_y(y))
@@ -314,10 +291,8 @@ class Thing:
 
     def draw(self, s):
         x, y, sc = self.pos()
-
         src = RAMP_IMG if self.kind == "ramp" else (SUV1_IMG if self.var == 1 else SUV2_IMG)
 
-        # IMPORTANTISSIMO: evitare 0px (invisibili)
         w = max(10, int(src.get_width() * 0.22 * sc))
         h = max(10, int(src.get_height() * 0.22 * sc))
 
@@ -349,7 +324,6 @@ async def main():
     mouse_down = False
     mouse_pos = (0, 0)
 
-    # touch zones + buttons
     LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
     RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
 
@@ -382,7 +356,6 @@ async def main():
             now = pygame.time.get_ticks()
             night = night_factor(now)
 
-            # start screen
             if not started:
                 screen.fill((0,0,0))
                 draw_text(screen, "RIDERS", WIDTH//2, HEIGHT//2 - 40, center=True, fnt=big_font)
@@ -398,7 +371,6 @@ async def main():
                 await asyncio.sleep(0)
                 continue
 
-            # events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
@@ -409,7 +381,6 @@ async def main():
                     elif state["over"] and event.key == pygame.K_r:
                         state = reset()
 
-                # mouse
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     mouse_down = True
                     mouse_pos = event.pos
@@ -418,7 +389,6 @@ async def main():
                 elif event.type == pygame.MOUSEBUTTONUP:
                     mouse_down = False
 
-                # touch
                 if event.type == pygame.FINGERDOWN:
                     fid = getattr(event, "finger_id", 0)
                     active_fingers[fid] = finger_to_xy(event.x, event.y)
@@ -430,7 +400,6 @@ async def main():
                     fid = getattr(event, "finger_id", 0)
                     active_fingers.pop(fid, None)
 
-            # input hold
             pressed_left = pressed_right = pressed_jump = pressed_restart = False
 
             keys = pygame.key.get_pressed()
@@ -466,7 +435,6 @@ async def main():
             if pressed_restart and state["over"]:
                 state = reset()
 
-            # update
             elapsed = (now - state["start"]) / 1000.0
             speed = 0.85 + 0.020 * elapsed
 
@@ -494,7 +462,6 @@ async def main():
                 state["things"] = [t for t in state["things"] if not t.dead()]
                 state["score"] += (speed * 120) * dt
 
-            # draw
             screen.blit(BG_IMG, (0,0))
             draw_road(screen, now, night)
             draw_lamps(screen, night, now)
@@ -504,7 +471,6 @@ async def main():
 
             state["player"].draw(screen)
 
-            # overlay notte (meno buio)
             if night > 0:
                 ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
                 ov.fill((0,0,0, int(lerp(0, 95, night))))
