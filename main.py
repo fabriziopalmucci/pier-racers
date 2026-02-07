@@ -5,575 +5,329 @@ import asyncio
 import traceback
 import math
 
-# -----------------------------
-# Config
-# -----------------------------
+# =============================
+# CONFIG
+# =============================
 WIDTH, HEIGHT = 900, 600
 FPS = 60
 
-# Strada: (questa versione era quella "buona")
+# Strada (VERSIONE BUONA)
 HORIZON_Y = int(HEIGHT * 0.52)
 BOTTOM_Y  = int(HEIGHT * 0.985)
 
-ROAD_NEAR_W = int(WIDTH * 1.32)   # larga sotto
-ROAD_FAR_W  = int(WIDTH * 0.14)   # stretta sopra
+ROAD_NEAR_W = int(WIDTH * 1.32)
+ROAD_FAR_W  = int(WIDTH * 0.14)
 
 SPAWN_MS = 520
 RAMP_CHANCE = 0.25
 
 SPRITE_ROT_DEG = 0
 
-# Giorno/notte (globale)
-DAY_NIGHT_PERIOD_S = 60
+# Giorno / Notte
+DAY_NIGHT_PERIOD_S = 60.0      # ciclo completo
 DAY_NIGHT_FADE_S   = 3.0
 
-# -----------------------------
-# Init
-# -----------------------------
+# =============================
+# INIT
+# =============================
 pygame.init()
 try:
-    pygame.mixer.quit()  # aiuta su iPhone (autoplay audio)
+    pygame.mixer.quit()
 except Exception:
     pass
 
-pygame.display.set_caption("Riders - NYC Day/Night")
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Riders - NYC")
 clock = pygame.time.Clock()
+
 font = pygame.font.SysFont(None, 24)
 big_font = pygame.font.SysFont(None, 56)
 
 APP_START_MS = pygame.time.get_ticks()
 
-def clamp(x, a, b): return max(a, min(b, x))
-def lerp(a, b, t): return a + (b - a) * t
+def clamp(x,a,b): return max(a,min(b,x))
+def lerp(a,b,t): return a+(b-a)*t
 
-def draw_text(surf, text, x, y, color=(255, 255, 255), center=False, fnt=None):
+# =============================
+# UTILS
+# =============================
+def draw_text(surf, txt, x, y, color=(255,255,255), center=False, fnt=None):
     fnt = fnt or font
-    img = fnt.render(text, True, color)
-    rect = img.get_rect()
-    if center:
-        rect.center = (x, y)
-    else:
-        rect.topleft = (x, y)
-    surf.blit(img, rect)
+    img = fnt.render(txt, True, color)
+    r = img.get_rect()
+    r.center = (x,y) if center else (x,y)
+    if not center: r.topleft = (x,y)
+    surf.blit(img, r)
 
-# -----------------------------
-# Assets
-# -----------------------------
+# =============================
+# ASSETS
+# =============================
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 
-def trim_alpha(img: pygame.Surface, min_alpha: int = 1) -> pygame.Surface:
-    """
-    Ritaglia i bordi completamente trasparenti.
-    Questo evita che lo scaling faccia "macchie" (si scala meno area vuota).
-    """
+def trim_alpha(img):
     try:
-        r = img.get_bounding_rect(min_alpha=min_alpha)
-        if r.width <= 0 or r.height <= 0:
-            return img
-        return img.subsurface(r).copy()
-    except Exception:
+        r = img.get_bounding_rect(min_alpha=1)
+        return img.subsurface(r).copy() if r.width>0 else img
+    except:
         return img
 
-def load_png(filename, fallback_size, color, colorkey=None, do_trim=False):
-    path = os.path.join(ASSETS_DIR, filename)
+def load_png(name, fallback, color, trim=False):
     try:
-        img = pygame.image.load(path).convert_alpha()
-        if colorkey is not None:
-            img.set_colorkey(colorkey)
-        if do_trim:
-            img = trim_alpha(img, min_alpha=1)
-        return img
-    except Exception:
-        surf = pygame.Surface(fallback_size, pygame.SRCALPHA)
-        pygame.draw.rect(surf, color, (0, 0, fallback_size[0], fallback_size[1]), border_radius=12)
-        return surf
+        img = pygame.image.load(os.path.join(ASSETS_DIR,name)).convert_alpha()
+        return trim_alpha(img) if trim else img
+    except:
+        s = pygame.Surface(fallback, pygame.SRCALPHA)
+        pygame.draw.rect(s, color, s.get_rect(), border_radius=12)
+        return s
 
-def load_bg(filename):
-    path = os.path.join(ASSETS_DIR, filename)
+def load_bg(name):
     try:
-        img = pygame.image.load(path).convert()
-        return pygame.transform.smoothscale(img, (WIDTH, HEIGHT))
-    except Exception:
-        bg = pygame.Surface((WIDTH, HEIGHT))
-        bg.fill((30, 30, 30))
+        img = pygame.image.load(os.path.join(ASSETS_DIR,name)).convert()
+        return pygame.transform.smoothscale(img,(WIDTH,HEIGHT))
+    except:
+        bg = pygame.Surface((WIDTH,HEIGHT))
+        bg.fill((30,30,30))
         return bg
 
-def rotate(img, deg):
-    return img if deg == 0 else pygame.transform.rotate(img, deg)
-
-PLAYER_IMG = load_png("car_player.png", (260, 220), (220, 40, 40), colorkey=None)
-RAMP_IMG   = load_png("ramp_blue.png",  (280, 200), (70, 130, 255), colorkey=None)
-SUV1_IMG   = load_png("suv_black_1.png",(260, 220), (35, 35, 40), colorkey=None)
-SUV2_IMG   = load_png("suv_green.png",  (260, 220), (20, 180, 80), colorkey=None)
-
-# Lampione sprite: IMPORTANTISSIMO -> do_trim=True per evitare scaling su area vuota
-LAMP_IMG   = load_png("lamppost_L.png", (512, 512), (90, 90, 95), colorkey=None, do_trim=True)
-
+PLAYER_IMG = load_png("car_player.png",(260,220),(220,40,40))
+SUV1_IMG   = load_png("suv_black_1.png",(260,220),(40,40,40))
+SUV2_IMG   = load_png("suv_green.png",(260,220),(40,120,60))
+RAMP_IMG   = load_png("ramp_blue.png",(280,200),(70,130,255))
+LAMP_IMG   = load_png("lamppost_L.png",(512,512),(90,90,95), trim=True)
 BG_IMG     = load_bg("nyc_bg.png")
 
-# -----------------------------
-# Road geometry
-# -----------------------------
+# =============================
+# ROAD
+# =============================
 def road_half_width_at_y(y):
-    t = clamp((y - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
-    t2 = t ** 0.55
-    w = ROAD_FAR_W + (ROAD_NEAR_W - ROAD_FAR_W) * t2
-    return w / 2
+    t = clamp((y-HORIZON_Y)/(BOTTOM_Y-HORIZON_Y),0,1)
+    return (ROAD_FAR_W + (ROAD_NEAR_W-ROAD_FAR_W)*(t**0.55))/2
 
-# -----------------------------
-# Day/Night smooth factor
-# night_factor in [0..1]
-# -----------------------------
-def get_night_factor(now_ms):
-    t = (now_ms - APP_START_MS) / 1000.0
-    p = DAY_NIGHT_PERIOD_S
-
-    phase = (t % p) / p  # 0..1
-    step = 0.0 if phase < 0.5 else 1.0
-
-    fade = DAY_NIGHT_FADE_S / p
-    d_switch = abs(phase - 0.5)
-
-    if d_switch < fade:
-        x = 1.0 - (d_switch / fade)
-        x = 0.5 - 0.5 * math.cos(math.pi * x)
-        if phase < 0.5:
-            step = x
-        else:
-            step = 1.0 - x
-
-    return clamp(step, 0.0, 1.0)
-
-# -----------------------------
-# Lampioni + luci (sprite)
-# -----------------------------
-def draw_lamps_and_lights(surf, night_factor, t_ms):
-    is_nightish = night_factor > 0.02
-
-    step = 170
-    scroll = int((t_ms * 0.12) % step)
-
-    # Disegno "dal basso verso l'alto" così è più stabile visivamente
-    y0 = int(BOTTOM_Y)
-    y_min = int(HORIZON_Y + 25)
-
-    yy = y0 + scroll
-    while yy >= y_min:
-        t = clamp((yy - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
-        t2 = t ** 0.60
-
-        half = road_half_width_at_y(yy)
-        inset = int(lerp(6, 18, t2))
-
-        left_base_x  = int(WIDTH/2 - half + inset)
-        right_base_x = int(WIDTH/2 + half - inset)
-        base_y = int(yy)
-
-        # >>> FIX LAMPI0NI: scala più sensata + NO smoothscale (evita macchie nere)
-        s = lerp(0.18, 0.42, t2)  # più piccoli e meglio distribuiti
-        lamp_w = max(18, int(LAMP_IMG.get_width() * s))
-        lamp_h = max(18, int(LAMP_IMG.get_height() * s))
-
-        # scale (non smoothscale) per evitare aloni/ macchie nere con trasparenza
-        lamp_scaled = pygame.transform.scale(LAMP_IMG, (lamp_w, lamp_h))
-        lamp_right  = pygame.transform.flip(lamp_scaled, True, False)
-
-        rectL = lamp_scaled.get_rect()
-        rectL.midbottom = (left_base_x, base_y)
-
-        rectR = lamp_right.get_rect()
-        rectR.midbottom = (right_base_x, base_y)
-
-        surf.blit(lamp_scaled, rectL)
-        surf.blit(lamp_right, rectR)
-
-        if is_nightish:
-            alpha1 = int(lerp(0, 110, night_factor))
-            alpha2 = int(lerp(0, 60, night_factor))
-
-            headL = (rectL.centerx + int(lamp_w * 0.26), rectL.top + int(lamp_h * 0.36))
-            headR = (rectR.centerx - int(lamp_w * 0.26), rectR.top + int(lamp_h * 0.36))
-
-            cone_h = int(lerp(110, 300, t2))
-            cone_w = int(lerp(110, 300, t2))
-
-            for (hx, hy) in (headL, headR):
-                cone = pygame.Surface((cone_w, cone_h), pygame.SRCALPHA)
-                pygame.draw.polygon(
-                    cone,
-                    (255, 235, 170, alpha1),
-                    [(cone_w//2, 0), (0, cone_h), (cone_w, cone_h)]
-                )
-                pygame.draw.polygon(
-                    cone,
-                    (255, 235, 170, alpha2),
-                    [(cone_w//2, 0), (int(cone_w*0.18), cone_h), (int(cone_w*0.82), cone_h)]
-                )
-                surf.blit(cone, (hx - cone_w//2, hy))
-
-        yy -= step
-
-# -----------------------------
-# Road drawing
-# -----------------------------
-def draw_road(surf, t_ms, night_factor):
-    far_half = ROAD_FAR_W / 2
-    near_half = ROAD_NEAR_W / 2
-
+def draw_road(surf, t_ms, night):
+    far = ROAD_FAR_W/2
+    near = ROAD_NEAR_W/2
     pts = [
-        (WIDTH/2 - far_half, HORIZON_Y),
-        (WIDTH/2 + far_half, HORIZON_Y),
-        (WIDTH/2 + near_half, BOTTOM_Y),
-        (WIDTH/2 - near_half, BOTTOM_Y),
+        (WIDTH/2-far, HORIZON_Y),
+        (WIDTH/2+far, HORIZON_Y),
+        (WIDTH/2+near, BOTTOM_Y),
+        (WIDTH/2-near, BOTTOM_Y)
     ]
+    day = (155,155,162)
+    night_c = (95,95,102)
+    col = tuple(int(lerp(d,n,night)) for d,n in zip(day,night_c))
+    pygame.draw.polygon(surf,col,pts)
 
-    # asfalto più chiaro (anche di notte non deve diventare troppo scuro)
-    day_asphalt   = (155, 155, 162)
-    night_asphalt = (95,  95,  102)  # <-- FIX: più chiaro di notte
-    asphalt = (
-        int(lerp(day_asphalt[0], night_asphalt[0], night_factor)),
-        int(lerp(day_asphalt[1], night_asphalt[1], night_factor)),
-        int(lerp(day_asphalt[2], night_asphalt[2], night_factor)),
-    )
-    pygame.draw.polygon(surf, asphalt, pts)
+    edge = tuple(int(lerp(245,220,night)) for _ in range(3))
+    pygame.draw.line(surf,edge,pts[0],pts[3],6)
+    pygame.draw.line(surf,edge,pts[1],pts[2],6)
 
-    edge_day = (245, 245, 245)
-    edge_night = (220, 220, 220)
-    edge = (
-        int(lerp(edge_day[0], edge_night[0], night_factor)),
-        int(lerp(edge_day[1], edge_night[1], night_factor)),
-        int(lerp(edge_day[2], edge_night[2], night_factor)),
-    )
-    pygame.draw.line(surf, edge, pts[0], pts[3], 6)
-    pygame.draw.line(surf, edge, pts[1], pts[2], 6)
+    off = int((t_ms*0.32)%44)
+    for y in range(HORIZON_Y+10,int(BOTTOM_Y)+160,44):
+        pygame.draw.rect(surf,(10,10,10),(WIDTH//2-3,y+off,6,26),border_radius=3)
 
-    # linea centrale NERA
-    dash_len, gap = 26, 18
-    offset = int((t_ms * 0.32) % (dash_len + gap))
-    for y in range(HORIZON_Y + 8, int(BOTTOM_Y) + 160, dash_len + gap):
-        yy = y + offset
-        pygame.draw.rect(surf, (10, 10, 10), (WIDTH/2 - 3, yy, 6, dash_len), border_radius=3)
+# =============================
+# DAY / NIGHT
+# =============================
+def night_factor(now_ms):
+    t = (now_ms-APP_START_MS)/1000
+    half = DAY_NIGHT_PERIOD_S/2
+    target = 0 if (t%DAY_NIGHT_PERIOD_S)<half else 1
+    prev = 1-target
+    local = t%half
+    if local<DAY_NIGHT_FADE_S:
+        x = clamp(local/DAY_NIGHT_FADE_S,0,1)
+        x = 0.5-0.5*math.cos(math.pi*x)
+        return prev*(1-x)+target*x
+    return target
 
-# -----------------------------
-# Touch UI
-# -----------------------------
-LEFT_ZONE  = pygame.Rect(0, 0, int(WIDTH * 0.42), HEIGHT)
-RIGHT_ZONE = pygame.Rect(int(WIDTH * 0.58), 0, int(WIDTH * 0.42), HEIGHT)
+# =============================
+# LAMP LIGHT (RADIAL)
+# =============================
+_light_cache={}
+def radial_light(w,h,intensity):
+    key=(w,h,intensity)
+    if key in _light_cache: return _light_cache[key]
+    s=pygame.Surface((w,h),pygame.SRCALPHA)
+    cx,cy=w//2,int(h*0.15)
+    for i in range(16,0,-1):
+        t=i/16
+        r=int(max(w,h)*t*0.6)
+        a=int(intensity*(t**2))
+        pygame.draw.circle(s,(255,235,190,a),(cx,cy),r)
+    _light_cache[key]=s
+    return s
 
-BTN_R = int(min(WIDTH, HEIGHT) * 0.11)
-JUMP_C = (int(WIDTH * 0.88), int(HEIGHT * 0.60))
-JUMP_BTN = pygame.Rect(JUMP_C[0] - BTN_R, JUMP_C[1] - BTN_R, BTN_R*2, BTN_R*2)
+# =============================
+# LAMPS
+# =============================
+def draw_lamps(surf, night, t_ms):
+    step=140
+    scroll=int((t_ms*0.12)%step)
+    Y_SHIFT=int(HEIGHT*0.15)
 
-RESTART_C = (int(WIDTH * 0.12), int(HEIGHT * 0.60))
-RESTART_BTN = pygame.Rect(RESTART_C[0] - BTN_R, RESTART_C[1] - BTN_R, BTN_R*2, BTN_R*2)
+    y=int(BOTTOM_Y)+scroll
+    while y>=HORIZON_Y+5:
+        t=clamp((y-HORIZON_Y)/(BOTTOM_Y-HORIZON_Y),0,1)
+        t2=t**0.6
+        half=road_half_width_at_y(y)
 
-def finger_to_xy(x_norm, y_norm):
-    return int(x_norm * WIDTH), int(y_norm * HEIGHT)
+        inset=int(lerp(6,18,t2))
+        lx=int(WIDTH/2-half+inset)
+        rx=int(WIDTH/2+half-inset)
+        by=min(int(y+Y_SHIFT),int(BOTTOM_Y))
 
-def draw_circle_button(surf, center, radius, label, active=False):
-    cx, cy = center
-    btn = pygame.Surface((radius*2, radius*2), pygame.SRCALPHA)
-    pygame.draw.circle(btn, (0, 0, 0, 120 if not active else 170), (radius, radius), radius)
-    pygame.draw.circle(btn, (255, 255, 255, 180), (radius, radius), radius-4, width=4)
-    surf.blit(btn, (cx - radius, cy - radius))
-    draw_text(surf, label, cx, cy, center=True, color=(255, 255, 255), fnt=font)
+        scale=lerp(0.10,0.42,t2)
+        w=int(LAMP_IMG.get_width()*scale)
+        h=int(LAMP_IMG.get_height()*scale)
+        lamp=pygame.transform.scale(LAMP_IMG,(w,h))
+        lamp_r=pygame.transform.flip(lamp,True,False)
 
-def draw_touch_overlay(surf, jump, show_restart, restart_active):
-    draw_circle_button(surf, JUMP_C, BTN_R, "JUMP", active=jump)
-    if show_restart:
-        draw_circle_button(surf, RESTART_C, BTN_R, "R", active=restart_active)
+        rL=lamp.get_rect(midbottom=(lx,by))
+        rR=lamp_r.get_rect(midbottom=(rx,by))
 
-# -----------------------------
-# Entities
-# -----------------------------
+        surf.blit(lamp,rL)
+        surf.blit(lamp_r,rR)
+
+        if night>0.02:
+            intensity=int(lerp(0,140,night)*lerp(0.6,1,t2))
+            blob=radial_light(int(lerp(120,420,t2)),int(lerp(110,360,t2)),intensity)
+            for r,sgn in ((rL,1),(rR,-1)):
+                hx=r.centerx+int(w*0.26*sgn)
+                hy=r.top+int(h*0.36)
+                surf.blit(blob,(hx-blob.get_width()//2,hy))
+
+        y-=step
+
+# =============================
+# ENTITIES
+# =============================
 class Player:
     def __init__(self):
-        self.lane_x = 0.0
-        self.steer_speed = 1.75
-        self.y = int(HEIGHT * 0.88)
+        self.lane_x=0
+        self.y=int(HEIGHT*0.88)
+        self.air=0
+        self.v_air=0
+        self.gravity=2.9
+        self.jump_strength=1.35
+        self.on_ground=True
+        w=int(PLAYER_IMG.get_width()*0.27)
+        h=int(PLAYER_IMG.get_height()*0.27)
+        self.img=pygame.transform.smoothscale(PLAYER_IMG,(w,h))
 
-        self.air = 0.0
-        self.v_air = 0.0
-        self.gravity = 2.9
-        self.jump_strength = 1.35
-        self.on_ground = True
-
-        self.visual_scale = 0.27
-
-    def jump(self, mult=1.0):
+    def jump(self,m=1):
         if self.on_ground:
-            self.v_air = self.jump_strength * mult
-            self.on_ground = False
+            self.v_air=self.jump_strength*m
+            self.on_ground=False
 
-    def update(self, dt, steer_dir):
-        self.lane_x = clamp(self.lane_x + steer_dir * self.steer_speed * dt, -0.98, 0.98)
-
+    def update(self,dt,steer):
+        self.lane_x=clamp(self.lane_x+steer*1.75*dt,-0.98,0.98)
         if not self.on_ground:
-            self.air += self.v_air * dt * 2.2
-            self.v_air -= self.gravity * dt * 2.2
-            if self.air <= 0.0:
-                self.air = 0.0
-                self.v_air = 0.0
-                self.on_ground = True
+            self.air+=self.v_air*dt*2.2
+            self.v_air-=self.gravity*dt*2.2
+            if self.air<=0:
+                self.air=0
+                self.v_air=0
+                self.on_ground=True
 
-    def screen_x(self):
-        half = road_half_width_at_y(self.y)
-        return int(WIDTH/2 + self.lane_x * half)
+    def x(self):
+        return int(WIDTH/2+self.lane_x*road_half_width_at_y(self.y))
 
-    def draw(self, surf):
-        x = self.screen_x()
-        base_w = int(PLAYER_IMG.get_width() * self.visual_scale)
-        base_h = int(PLAYER_IMG.get_height() * self.visual_scale)
-        img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
-        img = rotate(img, SPRITE_ROT_DEG)
-
-        lift = int(72 * self.air)
-        surf.blit(img, img.get_rect(center=(x, self.y - lift)))
+    def draw(self,s):
+        lift=int(72*self.air)
+        s.blit(self.img,self.img.get_rect(center=(self.x(),self.y-lift)))
 
 class Thing:
-    def __init__(self, kind):
-        self.kind = kind
-        lanes = [-0.70, -0.25, 0.25, 0.70]
-        self.lane_x = random.choice(lanes) + random.uniform(-0.12, 0.12)
-        self.lane_x = clamp(self.lane_x, -0.95, 0.95)
+    def __init__(self,kind):
+        self.kind=kind
+        self.lane_x=random.choice([-0.7,-0.25,0.25,0.7])+random.uniform(-0.12,0.12)
+        self.d=1+random.uniform(0.02,0.15)
+        self.var=random.choice([1,2]) if kind=="suv" else 0
 
-        self.d = 1.0 + random.uniform(0.02, 0.15)
-        self.variant = random.choice([1, 2]) if kind == "suv" else 0
+    def update(self,dt,speed): self.d-=speed*dt
+    def dead(self): return self.d<-0.2
 
-    def update(self, dt, speed):
-        self.d -= speed * dt
+    def pos(self):
+        t=clamp(1-self.d,0,1)
+        y=int(lerp(HORIZON_Y+10,HEIGHT*0.90,t))
+        x=int(WIDTH/2+self.lane_x*road_half_width_at_y(y))
+        s=lerp(0.18,1,t)
+        return x,y,s
 
-    def is_dead(self):
-        return self.d < -0.20
+    def draw(self,s):
+        x,y,sc=self.pos()
+        src=RAMP_IMG if self.kind=="ramp" else (SUV1_IMG if self.var==1 else SUV2_IMG)
+        w=int(src.get_width()*0.22*sc)
+        h=int(src.get_height()*0.22*sc)
+        img=pygame.transform.smoothscale(src,(w,h))
+        s.blit(img,img.get_rect(center=(x,y)))
 
-    def screen_pos_and_scale(self):
-        t = clamp(1.0 - self.d, 0.0, 1.0)
-        y = lerp(HORIZON_Y + 10, int(HEIGHT * 0.90), t)
+    def hit(self,p):
+        if not (0<=self.d<=0.1): return False
+        x,_,_=self.pos()
+        return abs(p.x()-x)<75
 
-        half = road_half_width_at_y(y)
-        x = WIDTH/2 + self.lane_x * half
-
-        scale = lerp(0.18, 1.00, t)
-        return int(x), int(y), scale
-
-    def draw(self, surf):
-        x, y, scale = self.screen_pos_and_scale()
-
-        if self.kind == "suv":
-            src = SUV1_IMG if self.variant == 1 else SUV2_IMG
-            w = max(34, int(src.get_width() * 0.22 * scale))
-            h = max(34, int(src.get_height() * 0.22 * scale))
-        else:
-            src = RAMP_IMG
-            w = max(44, int(src.get_width() * 0.20 * scale))
-            h = max(30, int(src.get_height() * 0.20 * scale))
-
-        img = pygame.transform.smoothscale(src, (w, h))
-        img = rotate(img, SPRITE_ROT_DEG)
-        surf.blit(img, img.get_rect(center=(x, y)))
-
-    def collides_with_player(self, player: Player):
-        if not (0.00 <= self.d <= 0.10):
-            return False
-        px = player.screen_x()
-        x, _, _ = self.screen_pos_and_scale()
-        return abs(px - x) < 75
-
-# -----------------------------
-# Game state
-# -----------------------------
+# =============================
+# GAME LOOP
+# =============================
 def reset():
-    now = pygame.time.get_ticks()
-    return {
-        "player": Player(),
-        "things": [],
-        "score": 0.0,
-        "start_ms": now,
-        "last_spawn": now,
-        "game_over": False,
-    }
+    return {"player":Player(),"things":[],"score":0,"last":pygame.time.get_ticks(),"over":False}
 
-# -----------------------------
-# Async loop (web-safe)
-# -----------------------------
-async def main():
-    state = reset()
-    runtime_error = None
-    started = False
+state=reset()
 
-    active_fingers = {}
-    mouse_down = False
-    mouse_pos = (0, 0)
+while True:
+    dt=clock.tick(FPS)/1000
+    now=pygame.time.get_ticks()
 
-    while True:
-        try:
-            dt = clock.tick(FPS) / 1000.0
-            now = pygame.time.get_ticks()
+    for e in pygame.event.get():
+        if e.type==pygame.QUIT: pygame.quit(); exit()
+        if e.type==pygame.KEYDOWN:
+            if not state["over"] and e.key==pygame.K_SPACE: state["player"].jump()
+            if state["over"] and e.key==pygame.K_r: state=reset()
 
-            night_factor = get_night_factor(now)
+    keys=pygame.key.get_pressed()
+    steer=(-1 if keys[pygame.K_a] or keys[pygame.K_LEFT] else 0)+(1 if keys[pygame.K_d] or keys[pygame.K_RIGHT] else 0)
 
-            # start screen
-            if not started:
-                screen.fill((0, 0, 0))
-                draw_text(screen, "RIDERS", WIDTH//2, HEIGHT//2 - 40, center=True, fnt=big_font)
-                draw_text(screen, "TAP TO START", WIDTH//2, HEIGHT//2 + 10, center=True, color=(180, 180, 180))
-                pygame.display.flip()
+    speed=0.85+0.02*((now-state["last"])/1000)
 
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        return
-                    if event.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN, pygame.KEYDOWN):
-                        started = True
+    if not state["over"]:
+        state["player"].update(dt,steer)
 
-                await asyncio.sleep(0)
-                continue
+        if now-state["last"]>SPAWN_MS:
+            state["things"].append(Thing("ramp" if random.random()<RAMP_CHANCE else "suv"))
+            state["last"]=now
 
-            # events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    return
+        for t in list(state["things"]):
+            t.update(dt,speed)
+            if t.hit(state["player"]):
+                if t.kind=="ramp":
+                    state["player"].jump(2.2)
+                    state["things"].remove(t)
+                elif state["player"].air<0.28:
+                    state["over"]=True
+            if t.dead(): state["things"].remove(t)
 
-                if event.type == pygame.KEYDOWN:
-                    if not state["game_over"] and event.key == pygame.K_SPACE:
-                        state["player"].jump(mult=1.0)
-                    elif state["game_over"] and event.key == pygame.K_r:
-                        state = reset()
+        state["score"]+=speed*120*dt
 
-                # mouse
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_down = True
-                    mouse_pos = event.pos
-                elif event.type == pygame.MOUSEMOTION and mouse_down:
-                    mouse_pos = event.pos
-                elif event.type == pygame.MOUSEBUTTONUP:
-                    mouse_down = False
+    night=night_factor(now)
 
-                # touch
-                if event.type == pygame.FINGERDOWN:
-                    fid = getattr(event, "finger_id", 0)
-                    active_fingers[fid] = finger_to_xy(event.x, event.y)
-                elif event.type == pygame.FINGERMOTION:
-                    fid = getattr(event, "finger_id", 0)
-                    if fid in active_fingers:
-                        active_fingers[fid] = finger_to_xy(event.x, event.y)
-                elif event.type == pygame.FINGERUP:
-                    fid = getattr(event, "finger_id", 0)
-                    active_fingers.pop(fid, None)
+    screen.blit(BG_IMG,(0,0))
+    draw_road(screen,now,night)
+    draw_lamps(screen,night,now)
 
-            # input hold
-            pressed_left = pressed_right = pressed_jump = pressed_restart = False
+    for t in sorted(state["things"],key=lambda x:x.d,reverse=True):
+        t.draw(screen)
+    state["player"].draw(screen)
 
-            keys = pygame.key.get_pressed()
-            steer_dir = 0.0
-            if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-                steer_dir -= 1.0
-            if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-                steer_dir += 1.0
+    if night>0:
+        ov=pygame.Surface((WIDTH,HEIGHT),pygame.SRCALPHA)
+        ov.fill((0,0,0,int(lerp(0,95,night))))
+        screen.blit(ov,(0,0))
 
-            pointers = []
-            if mouse_down:
-                pointers.append(mouse_pos)
-            pointers.extend(active_fingers.values())
+    draw_text(screen,"RIDERS",18,12,(0,0,0))
+    draw_text(screen,f"Score: {int(state['score'])}",18,38,(0,0,0))
 
-            for (mx, my) in pointers:
-                if LEFT_ZONE.collidepoint(mx, my):
-                    pressed_left = True
-                if RIGHT_ZONE.collidepoint(mx, my):
-                    pressed_right = True
-                if JUMP_BTN.collidepoint(mx, my):
-                    pressed_jump = True
-                if state["game_over"] and RESTART_BTN.collidepoint(mx, my):
-                    pressed_restart = True
+    if state["over"]:
+        draw_text(screen,"GAME OVER",WIDTH//2,HEIGHT//2-30,center=True,fnt=big_font,color=(0,0,0))
+        draw_text(screen,"R per ricominciare",WIDTH//2,HEIGHT//2+18,center=True,color=(0,0,0))
 
-            if pressed_left and not pressed_right:
-                steer_dir = -1.0
-            elif pressed_right and not pressed_left:
-                steer_dir = 1.0
-
-            if pressed_jump and (not state["game_over"]):
-                state["player"].jump(mult=1.0)
-
-            if pressed_restart and state["game_over"]:
-                state = reset()
-
-            # update
-            elapsed = (now - state["start_ms"]) / 1000.0
-            speed = 0.85 + 0.020 * elapsed
-
-            if not state["game_over"]:
-                state["player"].update(dt, steer_dir)
-
-                if now - state["last_spawn"] > SPAWN_MS:
-                    kind = "ramp" if random.random() < RAMP_CHANCE else "suv"
-                    state["things"].append(Thing(kind))
-                    state["last_spawn"] = now
-
-                for th in state["things"]:
-                    th.update(dt, speed)
-
-                for th in list(state["things"]):
-                    if th.collides_with_player(state["player"]):
-                        if th.kind == "ramp":
-                            state["player"].jump(mult=2.2)
-                            state["things"].remove(th)
-                        else:
-                            if state["player"].air > 0.28:
-                                continue
-                            state["game_over"] = True
-
-                state["things"] = [t for t in state["things"] if not t.is_dead()]
-                state["score"] += (speed * 120) * dt
-
-            # -----------------------------
-            # DRAW
-            # -----------------------------
-            screen.blit(BG_IMG, (0, 0))
-
-            # overlay notte smooth (FIX: meno buio)
-            if night_factor > 0.0:
-                overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-                overlay.fill((0, 0, 0, int(lerp(0, 95, night_factor))))  # <-- 160 -> 95
-                screen.blit(overlay, (0, 0))
-
-            draw_road(screen, now, night_factor)
-            draw_lamps_and_lights(screen, night_factor, now)
-
-            for th in sorted(state["things"], key=lambda t: t.d, reverse=True):
-                th.draw(screen)
-
-            state["player"].draw(screen)
-
-            hud_color = (10, 10, 10) if night_factor < 0.5 else (240, 240, 240)
-            draw_text(screen, "RIDERS", 18, 12, color=hud_color)
-            draw_text(screen, f"{'Night' if night_factor>0.5 else 'Day'} | Score: {int(state['score'])}", 18, 38, color=hud_color)
-
-            draw_touch_overlay(
-                screen,
-                jump=pressed_jump,
-                show_restart=state["game_over"],
-                restart_active=pressed_restart
-            )
-
-            if state["game_over"]:
-                draw_text(screen, "GAME OVER", WIDTH//2, HEIGHT//2 - 35, center=True, fnt=big_font, color=hud_color)
-                draw_text(screen, "Tap R (or press R) to restart", WIDTH//2, HEIGHT//2 + 20, center=True, color=hud_color)
-
-            if runtime_error:
-                ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-                ov.fill((0, 0, 0, 190))
-                screen.blit(ov, (0, 0))
-                draw_text(screen, "RUNTIME ERROR", 18, 18, color=(255, 120, 120))
-                y = 52
-                for line in runtime_error.splitlines()[:18]:
-                    draw_text(screen, line[:120], 18, y, color=(255, 255, 255))
-                    y += 24
-
-            pygame.display.flip()
-            await asyncio.sleep(0)
-
-        except Exception:
-            runtime_error = traceback.format_exc()
-            await asyncio.sleep(0)
-
-asyncio.run(main())
+    pygame.display.flip()
