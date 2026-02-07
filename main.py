@@ -11,9 +11,9 @@ import math
 WIDTH, HEIGHT = 900, 600
 FPS = 60
 
-# Strada: leggermente più in alto rispetto a prima
-HORIZON_Y = int(HEIGHT * 0.52)
-BOTTOM_Y  = int(HEIGHT * 0.985)
+# Strada: appena più in alto rispetto a quella che mi hai incollato
+HORIZON_Y = int(HEIGHT * 0.50)     # era 0.52
+BOTTOM_Y  = int(HEIGHT * 0.975)    # era 0.985 (leggermente più su)
 
 ROAD_NEAR_W = int(WIDTH * 1.32)   # larga sotto
 ROAD_FAR_W  = int(WIDTH * 0.14)   # stretta sopra
@@ -113,31 +113,19 @@ def road_half_width_at_y(y):
 def get_night_factor(now_ms):
     t = (now_ms - APP_START_MS) / 1000.0
     p = DAY_NIGHT_PERIOD_S
-
-    # triangolare 0..1..0 dentro il periodo
     phase = (t % p) / p
-    tri = phase * 2 if phase < 0.5 else (1 - phase) * 2  # 0..1..0
 
-    # vuole stare "giorno" metà periodo e "notte" metà periodo, con fade
-    # costruiamo un segnale a gradino e applichiamo fade
-    # step: 0 per prima metà, 1 per seconda metà
     step = 0.0 if phase < 0.5 else 1.0
 
-    # fade vicino al punto di switch (phase ~ 0.5 e ~0.0)
-    fade = DAY_NIGHT_FADE_S / p  # frazione del periodo
-    # distanza dal punto di switch a 0.5
+    fade = DAY_NIGHT_FADE_S / p
     d_switch = abs(phase - 0.5)
 
     if d_switch < fade:
-        # 0..1 con easing
         x = 1.0 - (d_switch / fade)
-        x = 0.5 - 0.5 * math.cos(math.pi * x)  # smoothstep cosine
-        # transizione da giorno->notte o notte->giorno
+        x = 0.5 - 0.5 * math.cos(math.pi * x)
         if phase < 0.5:
-            # siamo prima dello switch: stiamo andando verso 1
             step = x
         else:
-            # dopo lo switch: stiamo tornando verso 0
             step = 1.0 - x
 
     return clamp(step, 0.0, 1.0)
@@ -146,7 +134,6 @@ def get_night_factor(now_ms):
 # Lampioni + luci (sprite)
 # -----------------------------
 def draw_lamps_and_lights(surf, night_factor, t_ms):
-    # night_factor 0..1
     is_nightish = night_factor > 0.02
 
     step = 170
@@ -161,16 +148,16 @@ def draw_lamps_and_lights(surf, night_factor, t_ms):
         t = clamp((yy - HORIZON_Y) / (BOTTOM_Y - HORIZON_Y), 0.0, 1.0)
         t2 = t ** 0.60
 
-        # base sulla linea bianca: dentro di poco
-        inset = int(lerp(6, 18, t2))
+        # base sulla linea bianca: più preciso sul bordo (meno "fuori")
+        inset = int(lerp(2, 10, t2))  # era 6..18 (più dentro)
         left_base_x  = int(WIDTH/2 - half + inset)
         right_base_x = int(WIDTH/2 + half - inset)
         base_y = int(yy)
 
-        # più ALTI: scala più grande
-        s = lerp(0.28, 0.75, t2)
-        lamp_w = int(LAMP_IMG.get_width() * s)
-        lamp_h = int(LAMP_IMG.get_height() * s)
+        # PIÙ ALTI e leggibili: scala più grande (riduce effetto "macchia")
+        s = lerp(0.40, 0.95, t2)  # era 0.28..0.75
+        lamp_w = max(24, int(LAMP_IMG.get_width() * s))
+        lamp_h = max(24, int(LAMP_IMG.get_height() * s))
         lamp_scaled = pygame.transform.smoothscale(LAMP_IMG, (lamp_w, lamp_h))
         lamp_right = pygame.transform.flip(lamp_scaled, True, False)
 
@@ -180,20 +167,27 @@ def draw_lamps_and_lights(surf, night_factor, t_ms):
         rectR = lamp_right.get_rect()
         rectR.midbottom = (right_base_x, base_y)
 
+        # piccola "aura" dietro al lampione di notte per evitare blob nero
+        if is_nightish:
+            halo_a = int(lerp(0, 70, night_factor))
+            if halo_a > 0:
+                halo = pygame.Surface((lamp_w + 28, lamp_h + 28), pygame.SRCALPHA)
+                pygame.draw.ellipse(halo, (255, 240, 200, halo_a), halo.get_rect())
+                surf.blit(halo, halo.get_rect(center=rectL.center))
+                surf.blit(halo, halo.get_rect(center=rectR.center))
+
         surf.blit(lamp_scaled, rectL)
         surf.blit(lamp_right, rectR)
 
         if is_nightish:
-            # luci: intensità segue night_factor
-            intensity = int(lerp(0, 150, night_factor))
             alpha1 = int(lerp(0, 120, night_factor))
             alpha2 = int(lerp(0, 70, night_factor))
 
             headL = (rectL.centerx + int(lamp_w * 0.26), rectL.top + int(lamp_h * 0.36))
             headR = (rectR.centerx - int(lamp_w * 0.26), rectR.top + int(lamp_h * 0.36))
 
-            cone_h = int(lerp(110, 320, t2))
-            cone_w = int(lerp(110, 320, t2))
+            cone_h = int(lerp(120, 340, t2))
+            cone_w = int(lerp(120, 340, t2))
 
             for (hx, hy) in (headL, headR):
                 cone = pygame.Surface((cone_w, cone_h), pygame.SRCALPHA)
@@ -223,7 +217,6 @@ def draw_road(surf, t_ms, night_factor):
         (WIDTH/2 - near_half, BOTTOM_Y),
     ]
 
-    # asfalto più chiaro di giorno, più scuro di notte
     day_asphalt = (155, 155, 162)
     night_asphalt = (70, 70, 76)
     asphalt = (
@@ -244,7 +237,7 @@ def draw_road(surf, t_ms, night_factor):
     pygame.draw.line(surf, edge, pts[0], pts[3], 6)
     pygame.draw.line(surf, edge, pts[1], pts[2], 6)
 
-    # linea centrale NERA (dashed)
+    # linea centrale NERA
     dash_len, gap = 26, 18
     offset = int((t_ms * 0.32) % (dash_len + gap))
     for y in range(HORIZON_Y + 8, int(BOTTOM_Y) + 160, dash_len + gap):
@@ -324,7 +317,6 @@ class Player:
         img = pygame.transform.smoothscale(PLAYER_IMG, (base_w, base_h))
         img = rotate(img, SPRITE_ROT_DEG)
 
-        # niente ombra
         lift = int(72 * self.air)
         surf.blit(img, img.get_rect(center=(x, self.y - lift)))
 
